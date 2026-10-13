@@ -1,0 +1,4 @@
+# Apple Silicon (M1~M4). torch 2.11 은 macOS 11+ 휠을 제공하는 마지막 계열입니다
+# (torch 2.12 부터는 macOS 14+ 전용). Metal(MPS) GPU 가속 포함
+torch==2.11.0
+numpy>=1.26,<3

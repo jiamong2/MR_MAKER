@@ -1,0 +1,3 @@
+# Intel Mac (x86_64). PyTorch 는 2.2.2 가 Intel Mac 을 지원하는 마지막 버전입니다
+torch==2.2.2
+numpy>=1.26,<2

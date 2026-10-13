@@ -1,0 +1,282 @@
+# Music Separator - Windows / macOS 자동 빌드 + 실제 실행 테스트
+#
+# 실행 방법
+#   - main 브랜치에 push 또는 Pull Request → 테스트 + 빌드
+#   - Actions 탭 → "Build" → Run workflow (옵션 선택 가능)
+#   - v1.0.0 같은 태그 push → 빌드 후 GitHub Release 에 설치 파일 자동 업로드
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      bundle_models:
+        description: "AI 모델(htdemucs, htdemucs_6s)을 설치 파일에 포함 (오프라인 즉시 사용)"
+        type: boolean
+        default: true
+      build_cuda:
+        description: "Windows NVIDIA CUDA 빌드도 만들기 (약 2~3GB)"
+        type: boolean
+        default: true
+      cuda_tag:
+        description: "PyTorch CUDA 빌드 (cu126 / cu128 / cu130)"
+        type: string
+        default: cu128
+      build_intel_mac:
+        description: "Intel Mac 빌드도 만들기"
+        type: boolean
+        default: true
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
+  PYTHONUTF8: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  BUNDLE_MODELS: ${{ github.event_name != 'workflow_dispatch' || inputs.bundle_models }}
+
+jobs:
+  # ------------------------------------------------------------------ 테스트
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements/*.txt
+      - name: Install
+        run: |
+          pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements/common.txt -r requirements/dev.txt
+          pip install --no-deps -r requirements/demucs.txt
+          sudo apt-get update && sudo apt-get install -y libegl1 libxkbcommon0 libportaudio2
+      - name: Unit tests
+        run: pytest -q tests
+      - name: GUI smoke test (offscreen)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python run.py --gui-smoke smoke-linux.png
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: test-linux
+          path: smoke-linux.*
+          retention-days: 7
+
+  # ------------------------------------------------------------ AI 모델 준비
+  models:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/cache@v6
+        id: cache
+        with:
+          path: build/models
+          key: demucs-models-v1-htdemucs-htdemucs_6s
+      - name: Download models
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements/common.txt
+          pip install --no-deps -r requirements/demucs.txt
+          python scripts/fetch_models.py build/models htdemucs htdemucs_6s
+      - run: ls -laR build/models
+      - uses: actions/upload-artifact@v7
+        with:
+          name: models
+          path: build/models
+          retention-days: 3
+
+  # -------------------------------------------------------------- 배포 빌드
+  build:
+    needs: [test, models]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-x64-cpu,  os: windows-latest, torch: windows-cpu,  variant: cpu }
+          - { name: windows-x64-cuda, os: windows-latest, torch: windows-cuda, variant: cuda }
+          - { name: macos-arm64,      os: macos-14,       torch: macos-arm64,  variant: arm64 }
+          - { name: macos-x86_64,     os: macos-15-intel, torch: macos-intel,  variant: x86_64 }
+    runs-on: ${{ matrix.os }}
+    name: build (${{ matrix.name }})
+    env:
+      SKIP: ${{ (matrix.variant == 'cuda' && github.event_name == 'workflow_dispatch' && !inputs.build_cuda) || (matrix.variant == 'cuda' && github.event_name == 'pull_request') || (matrix.variant == 'x86_64' && github.event_name == 'workflow_dispatch' && !inputs.build_intel_mac) }}
+      MS_VARIANT: ${{ matrix.variant }}
+      HAS_MAC_CERT: ${{ secrets.MACOS_CERT_P12_BASE64 != '' }}
+      HAS_WIN_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        if: env.SKIP != 'true'
+      - uses: actions/setup-python@v7
+        if: env.SKIP != 'true'
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements/*.txt
+
+      - name: Install PyTorch (${{ matrix.torch }})
+        if: env.SKIP != 'true'
+        run: |
+          python -m pip install --upgrade pip wheel
+          if [ "${{ matrix.torch }}" = "windows-cuda" ]; then
+            TAG="${{ inputs.cuda_tag || 'cu128' }}"
+            pip install torch==2.11.0 "numpy>=1.26,<3" --index-url https://download.pytorch.org/whl/$TAG --extra-index-url https://pypi.org/simple
+          else
+            pip install -r requirements/torch-${{ matrix.torch }}.txt
+          fi
+          python -c "import torch, platform; print(torch.__version__, platform.machine(), 'cuda build:', torch.version.cuda)"
+
+      - name: Install app dependencies
+        if: env.SKIP != 'true'
+        run: |
+          pip install -r requirements/common.txt -r requirements/dev.txt
+          pip install --no-deps -r requirements/demucs.txt
+
+      - name: Unit tests (native)
+        if: env.SKIP != 'true'
+        run: pytest -q tests
+
+      - uses: actions/download-artifact@v8
+        if: env.SKIP != 'true' && env.BUNDLE_MODELS == 'true'
+        with:
+          name: models
+          path: build/models
+
+      - name: Install Inno Setup
+        if: env.SKIP != 'true' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+
+      # ---- 코드 서명 준비 (Secrets 가 등록된 경우에만) ----
+      - name: Import macOS signing certificate
+        if: env.SKIP != 'true' && runner.os == 'macOS' && env.HAS_MAC_CERT == 'true'
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KC="$RUNNER_TEMP/signing.keychain-db"; KCPW="$(uuidgen)"
+          echo "$MACOS_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MACOS_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KC"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KCPW" "$KC"
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+      - name: Prepare Windows signing certificate
+        if: env.SKIP != 'true' && runner.os == 'Windows' && env.HAS_WIN_CERT == 'true'
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+        run: |
+          echo "$WINDOWS_CERT_PFX_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.pfx"
+          echo "MS_WIN_SIGN_PFX=$RUNNER_TEMP/cert.pfx" >> "$GITHUB_ENV"
+
+      - name: Build
+        if: env.SKIP != 'true'
+        env:
+          MS_CODESIGN_ID: ${{ secrets.MACOS_CODESIGN_ID }}
+          MS_ENTITLEMENTS: ${{ github.workspace }}/packaging/macos/entitlements.plist
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          MS_WIN_SIGN_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          ARGS="--variant ${{ matrix.variant }}"
+          if [ "$BUNDLE_MODELS" = "true" ]; then ARGS="$ARGS --bundle-models build/models"; fi
+          python scripts/build.py $ARGS
+
+      # ---- 빌드된 실행 파일로 실제 동작 테스트 ----
+      - name: Test built app (Windows)
+        if: env.SKIP != 'true' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = "dist\MusicSeparator\MusicSeparator.exe"
+          $st = @("--selftest", "--report", "selftest-${{ matrix.name }}.json")
+          if ($env:BUNDLE_MODELS -eq 'true') { $st += "--no-download" }
+          $p = Start-Process $exe -ArgumentList $st -Wait -PassThru -NoNewWindow
+          Get-Content "selftest-${{ matrix.name }}.json"
+          if ($p.ExitCode -ne 0) { throw "selftest failed ($($p.ExitCode))" }
+          $p = Start-Process $exe -ArgumentList "--gui-smoke","smoke-${{ matrix.name }}.png" -Wait -PassThru
+          Get-Content "smoke-${{ matrix.name }}.json"
+          if ($p.ExitCode -ne 0) { throw "GUI smoke failed ($($p.ExitCode))" }
+          # 설치 프로그램 무인 설치 → 설치된 프로그램으로 다시 테스트
+          $setup = Get-ChildItem dist\release\*-setup.exe | Select-Object -First 1
+          if ($setup) {
+            $dir = "$env:RUNNER_TEMP\MusicSeparatorInstalled"
+            $p = Start-Process $setup.FullName -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/DIR=`"$dir`"" -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "installer failed ($($p.ExitCode))" }
+            $p = Start-Process "$dir\MusicSeparator.exe" -ArgumentList "--selftest","--model","demucs_unittest","--report","selftest-installed.json" -Wait -PassThru
+            Get-Content selftest-installed.json
+            if ($p.ExitCode -ne 0) { throw "installed app selftest failed" }
+          }
+
+      - name: Test built app (macOS)
+        if: env.SKIP != 'true' && runner.os == 'macOS'
+        run: |
+          BIN="dist/Music Separator.app/Contents/MacOS/MusicSeparator"
+          DL=""; [ "$BUNDLE_MODELS" = "true" ] && DL="--no-download"
+          "$BIN" --selftest --report "selftest-${{ matrix.name }}.json" $DL
+          "$BIN" --gui-smoke "smoke-${{ matrix.name }}.png"
+          cat "smoke-${{ matrix.name }}.json"
+          # DMG 를 마운트해서 그 안의 앱이 실행되는지 확인
+          DMG=$(ls dist/release/*.dmg | head -1)
+          MNT=$(hdiutil attach -nobrowse -readonly "$DMG" | tail -1 | awk -F'\t' '{print $NF}')
+          "$MNT/Music Separator.app/Contents/MacOS/MusicSeparator" --selftest --model demucs_unittest --report selftest-dmg.json
+          hdiutil detach "$MNT"
+          codesign -dv --verbose=2 "dist/Music Separator.app" 2>&1 | head -5 || true
+
+      - uses: actions/upload-artifact@v7
+        if: env.SKIP != 'true' && always()
+        with:
+          name: test-${{ matrix.name }}
+          path: |
+            selftest-*.json
+            smoke-*.png
+            smoke-*.json
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v7
+        if: env.SKIP != 'true'
+        with:
+          name: MusicSeparator-${{ matrix.name }}
+          path: dist/release/*
+          retention-days: 7
+          compression-level: 0
+
+  # ---------------------------------------------------- 태그 push 시 릴리스
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: MusicSeparator-*
+          path: release
+          merge-multiple: true
+      - name: Drop files over the 2GB release asset limit
+        run: |
+          find release -type f -size +2000M -print -delete
+          ls -la release
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: release/*
+          draft: true
+          generate_release_notes: true

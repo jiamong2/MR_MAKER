@@ -1,0 +1,4 @@
+# 빌드 / 테스트 도구
+pyinstaller==6.22.3
+pytest>=8
+pillow>=10

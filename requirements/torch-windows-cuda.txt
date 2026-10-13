@@ -1,0 +1,6 @@
+# Windows x64, NVIDIA CUDA 빌드 (설치 파일 용량이 약 2~3GB 로 커짐)
+# CUDA 버전은 GitHub Actions 입력값(cuda_tag)으로 바꿀 수 있습니다 (cu126 / cu128 / cu130)
+--index-url https://download.pytorch.org/whl/cu128
+--extra-index-url https://pypi.org/simple
+torch==2.11.0
+numpy>=1.26,<3
