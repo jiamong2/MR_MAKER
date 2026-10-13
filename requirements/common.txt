@@ -1,6 +1,8 @@
 # 모든 플랫폼 공통 런타임 의존성
 # demucs 는 requirements/demucs.txt 에서 --no-deps 로 설치합니다
 # (사용하지 않는 sphn / huggingface-hub 를 피해 번들 크기와 Intel Mac 빌드 문제를 줄임)
+numpy>=1.26,<3; sys_platform != "darwin" or platform_machine != "x86_64"
+numpy>=1.26,<2; sys_platform == "darwin" and platform_machine == "x86_64"
 PySide6-Essentials==6.9.3
 sounddevice==0.5.6
 imageio-ffmpeg==0.6.0
