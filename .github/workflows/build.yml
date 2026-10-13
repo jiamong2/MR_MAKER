@@ -58,7 +58,14 @@ jobs:
           pip install --no-deps -r requirements/demucs.txt
           sudo apt-get update && sudo apt-get install -y libegl1 libxkbcommon0 libportaudio2
       - name: Unit tests
-        run: pytest -q tests
+        run: |
+          set -o pipefail
+          pytest -q tests -rfE --tb=short 2>&1 | tee pytest.log
+      - name: Report test failures as annotations
+        if: failure()
+        run: |
+          grep -E "^(FAILED|ERROR)|Error:|assert" pytest.log | head -10 | while IFS= read -r l; do echo "::error::$l"; done
+          tail -40 pytest.log | tr '\n' '|' | cut -c1-3500 | sed 's/^/::error title=pytest tail::/'
       - name: GUI smoke test (offscreen)
         env:
           QT_QPA_PLATFORM: offscreen
@@ -148,7 +155,15 @@ jobs:
 
       - name: Unit tests (native)
         if: env.SKIP != 'true'
-        run: pytest -q tests
+        run: |
+          set -o pipefail
+          pytest -q tests -rfE --tb=short 2>&1 | tee pytest.log
+      - name: Report test failures as annotations
+        if: failure() && env.SKIP != 'true'
+        run: |
+          [ -f pytest.log ] || exit 0
+          grep -E "^(FAILED|ERROR)|Error:|assert" pytest.log | head -10 | while IFS= read -r l; do echo "::error::$l"; done
+          tail -40 pytest.log | tr '\n' '|' | cut -c1-3500 | sed 's/^/::error title=pytest tail::/'
 
       - uses: actions/download-artifact@v8
         if: env.SKIP != 'true' && env.BUNDLE_MODELS == 'true'
@@ -198,7 +213,8 @@ jobs:
         run: |
           ARGS="--variant ${{ matrix.variant }}"
           if [ "$BUNDLE_MODELS" = "true" ]; then ARGS="$ARGS --bundle-models build/models"; fi
-          python scripts/build.py $ARGS
+          set -o pipefail
+          python scripts/build.py $ARGS 2>&1 | tee build.log
 
       # ---- 빌드된 실행 파일로 실제 동작 테스트 ----
       - name: Test built app (Windows)
@@ -240,6 +256,17 @@ jobs:
           hdiutil detach "$MNT"
           codesign -dv --verbose=2 "dist/Music Separator.app" 2>&1 | head -5 || true
 
+      - name: Report failure details as annotations
+        if: failure() && env.SKIP != 'true'
+        run: |
+          if [ -f build.log ]; then
+            grep -iE "error|exception|failed" build.log | tail -8 | while IFS= read -r l; do echo "::error title=build::${l:0:900}"; done
+            tail -25 build.log | tr '\n' '|' | cut -c1-3500 | sed 's/^/::error title=build tail::/'
+          fi
+          for f in selftest-*.json smoke-*.json; do
+            [ -f "$f" ] || continue
+            python -c "import json,sys; d=json.load(open(sys.argv[1])); bad=[(k,v.get('error')) for k,v in d.get('checks',{}).items() if not v.get('ok')]; print('::error title=' + sys.argv[1] + '::' + json.dumps(bad or d.get('steps', d), ensure_ascii=False)[:3000])" "$f"
+          done
       - uses: actions/upload-artifact@v7
         if: env.SKIP != 'true' && always()
         with:
