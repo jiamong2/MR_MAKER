@@ -296,9 +296,8 @@ def test_download_cancel(http_root, tmp_path, monkeypatch):
     monkeypatch.setenv("HF_ENDPOINT", url)
     ev = threading.Event()
 
-    def prog(done, total, label):
-        if done > 1_000_000:
-            ev.set()
+    def prog(done, total, label):  # 진행률이 처음 보고되는 즉시 취소 (빠른 PC 에서도 결정적)
+        ev.set()
     with pytest.raises(models.DownloadCancelled):
         models.download_model("htdemucs", prog, ev)
     assert not models.is_installed("htdemucs")
