@@ -1,4 +1,4 @@
-# Music Separator - Windows / macOS 자동 빌드 + 실제 실행 테스트
+# MR MAKER for ui.clover - Windows / macOS 자동 빌드 + 실제 실행 테스트
 #
 # 실행 방법
 #   - main 브랜치에 push 또는 Pull Request → 테스트 + 빌드
@@ -66,15 +66,28 @@ jobs:
         run: |
           grep -E "^(FAILED|ERROR)|Error:|assert" pytest.log | head -10 | while IFS= read -r l; do echo "::error::$l"; done
           tail -40 pytest.log | tr '\n' '|' | cut -c1-3500 | sed 's/^/::error title=pytest tail::/'
-      - name: GUI smoke test (offscreen)
+      - name: GUI smoke test (offscreen, 4-Stem / 6-Stem + 키 조절)
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python run.py --gui-smoke smoke-linux.png
+        run: |
+          python run.py --gui-smoke smoke-linux.png
+          MUSIC_SEPARATOR_SMOKE_MODE=6 python run.py --gui-smoke smoke-linux-6.png
+      # 고급 엔진(BS-RoFormer SW): 실제 가중치 다운로드(URL·SHA256) + 로드 + 분리 품질까지 확인
+      - uses: actions/cache@v6
+        with:
+          path: .msdata/models/bs_roformer_sw
+          key: roformer-sw-v1-24e7d35e
+      - name: Advanced engine selftest (BS-RoFormer SW, CPU)
+        env:
+          MUSIC_SEPARATOR_DATA_DIR: ${{ github.workspace }}/.msdata
+        run: python run.py --selftest --engine roformer --mode 6 --seconds 6 --report selftest-roformer.json
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: test-linux
-          path: smoke-linux.*
+          path: |
+            smoke-linux*
+            selftest-roformer.json
           retention-days: 7
 
   # ------------------------------------------------------------ AI 모델 준비
@@ -221,22 +234,26 @@ jobs:
         if: env.SKIP != 'true' && runner.os == 'Windows'
         shell: pwsh
         run: |
-          $exe = "dist\MusicSeparator\MusicSeparator.exe"
-          $st = @("--selftest", "--report", "selftest-${{ matrix.name }}.json")
+          $exe = "dist\MRMaker\MRMaker.exe"
+          $st = @("--selftest", "--mode", "6", "--report", "selftest-${{ matrix.name }}.json")
           if ($env:BUNDLE_MODELS -eq 'true') { $st += "--no-download" }
           $p = Start-Process $exe -ArgumentList $st -Wait -PassThru -NoNewWindow
           Get-Content "selftest-${{ matrix.name }}.json"
           if ($p.ExitCode -ne 0) { throw "selftest failed ($($p.ExitCode))" }
+          # 고급 엔진 코드 경로(번들 포함 여부) - 초소형 RoFormer 로 확인
+          $p = Start-Process $exe -ArgumentList "--selftest","--model","roformer_unittest","--mode","6","--seconds","6","--report","selftest-roformer-${{ matrix.name }}.json" -Wait -PassThru -NoNewWindow
+          Get-Content "selftest-roformer-${{ matrix.name }}.json"
+          if ($p.ExitCode -ne 0) { throw "roformer selftest failed ($($p.ExitCode))" }
           $p = Start-Process $exe -ArgumentList "--gui-smoke","smoke-${{ matrix.name }}.png" -Wait -PassThru
           Get-Content "smoke-${{ matrix.name }}.json"
           if ($p.ExitCode -ne 0) { throw "GUI smoke failed ($($p.ExitCode))" }
           # 설치 프로그램 무인 설치 → 설치된 프로그램으로 다시 테스트
           $setup = Get-ChildItem dist\release\*-setup.exe | Select-Object -First 1
           if ($setup) {
-            $dir = "$env:RUNNER_TEMP\MusicSeparatorInstalled"
+            $dir = "$env:RUNNER_TEMP\MRMakerInstalled"
             $p = Start-Process $setup.FullName -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/DIR=`"$dir`"" -Wait -PassThru
             if ($p.ExitCode -ne 0) { throw "installer failed ($($p.ExitCode))" }
-            $p = Start-Process "$dir\MusicSeparator.exe" -ArgumentList "--selftest","--model","demucs_unittest","--report","selftest-installed.json" -Wait -PassThru
+            $p = Start-Process "$dir\MRMaker.exe" -ArgumentList "--selftest","--model","demucs_unittest","--report","selftest-installed.json" -Wait -PassThru
             Get-Content selftest-installed.json
             if ($p.ExitCode -ne 0) { throw "installed app selftest failed" }
           }
@@ -244,17 +261,19 @@ jobs:
       - name: Test built app (macOS)
         if: env.SKIP != 'true' && runner.os == 'macOS'
         run: |
-          BIN="dist/Music Separator.app/Contents/MacOS/MusicSeparator"
+          APP=$(ls -d dist/*.app | head -1); NAME=$(basename "$APP")
+          BIN="$APP/Contents/MacOS/MRMaker"
           DL=""; [ "$BUNDLE_MODELS" = "true" ] && DL="--no-download"
-          "$BIN" --selftest --report "selftest-${{ matrix.name }}.json" $DL
+          "$BIN" --selftest --mode 6 --report "selftest-${{ matrix.name }}.json" $DL
+          "$BIN" --selftest --model roformer_unittest --mode 6 --seconds 6 --report "selftest-roformer-${{ matrix.name }}.json"
           "$BIN" --gui-smoke "smoke-${{ matrix.name }}.png"
           cat "smoke-${{ matrix.name }}.json"
           # DMG 를 마운트해서 그 안의 앱이 실행되는지 확인
           DMG=$(ls dist/release/*.dmg | head -1)
           MNT=$(hdiutil attach -nobrowse -readonly "$DMG" | tail -1 | awk -F'\t' '{print $NF}')
-          "$MNT/Music Separator.app/Contents/MacOS/MusicSeparator" --selftest --model demucs_unittest --report selftest-dmg.json
+          "$MNT/$NAME/Contents/MacOS/MRMaker" --selftest --model demucs_unittest --report selftest-dmg.json
           hdiutil detach "$MNT"
-          codesign -dv --verbose=2 "dist/Music Separator.app" 2>&1 | head -5 || true
+          codesign -dv --verbose=2 "$APP" 2>&1 | head -5 || true
 
       - name: Report failure details as annotations
         if: failure() && env.SKIP != 'true'
@@ -280,7 +299,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: env.SKIP != 'true'
         with:
-          name: MusicSeparator-${{ matrix.name }}
+          name: MRMaker-${{ matrix.name }}
           path: dist/release/*
           retention-days: 7
           compression-level: 0
@@ -295,7 +314,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          pattern: MusicSeparator-*
+          pattern: MRMaker-*
           path: release
           merge-multiple: true
       - name: Drop files over the 2GB release asset limit

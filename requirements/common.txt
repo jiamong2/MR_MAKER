@@ -9,6 +9,8 @@ imageio-ffmpeg==0.6.0
 lameenc==1.8.4
 einops==0.8.2
 julius==0.2.8
+# 키 조절(피치 시프트): Signalsmith Stretch 바인딩, MIT
+python-stretch==0.3.1
 pyyaml>=6.0
 safetensors>=0.4
 tqdm>=4.66

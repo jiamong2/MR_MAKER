@@ -22,7 +22,7 @@ ROW_HEIGHT = 96
 ROW_SPACING = 8
 
 
-def glow(widget: QWidget, color: str = theme.ACCENT, radius: int = 26, alpha: int = 150,
+def glow(widget: QWidget, color: str = theme.ACCENT, radius: int = 22, alpha: int = 70,
          dy: float = 3.0) -> None:
     eff = QGraphicsDropShadowEffect(widget)
     c = QColor(color)
@@ -117,19 +117,20 @@ class ToggleSwitch(QAbstractButton):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = QRectF(1, 1, self.width() - 2, self.height() - 2)
-        off = QColor("#2a3450")
+        off = QColor(theme.TOGGLE_OFF)
         on = QColor(self._on_color)
         t = self._pos
         col = QColor(int(off.red() + (on.red() - off.red()) * t), int(off.green() + (on.green() - off.green()) * t),
                      int(off.blue() + (on.blue() - off.blue()) * t))
         if not self.isEnabled():
-            col = QColor("#20283d")
+            col = QColor("#e6eaf0")
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(col)
         p.drawRoundedRect(r, r.height() / 2, r.height() / 2)
         d = r.height() - 6
         x = r.left() + 3 + (r.width() - d - 6) * t
-        p.setBrush(QColor("#ffffff") if self.isEnabled() else QColor("#5e6883"))
+        p.setPen(QPen(QColor(0, 0, 0, 22), 1))
+        p.setBrush(QColor("#ffffff") if self.isEnabled() else QColor("#f6f7fa"))
         p.drawEllipse(QRectF(x, r.top() + 3, d, d))
         p.end()
 
@@ -152,7 +153,7 @@ class ModeTile(QAbstractButton):
 
     def _on_toggle(self, on: bool):
         if on:
-            glow(self, theme.ACCENT, 30, 140, 2)
+            glow(self, theme.ACCENT, 24, 55, 2)
         else:
             self.setGraphicsEffect(None)
         self.update()
@@ -173,20 +174,17 @@ class ModeTile(QAbstractButton):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
         if self.isChecked():
-            g = QLinearGradient(r.topLeft(), r.bottomRight())
-            g.setColorAt(0, QColor("#3a6cf5"))
-            g.setColorAt(1, QColor("#1f3ca8"))
-            p.setBrush(g)
-            p.setPen(QPen(QColor("#7aa6ff"), 1.5))
+            p.setBrush(QColor("#f4f8ff"))
+            p.setPen(QPen(QColor(theme.ACCENT), 1.6))
         else:
-            p.setBrush(QColor(theme.SURFACE_2) if not self._hover else QColor("#1b2440"))
-            p.setPen(QPen(QColor(theme.BORDER_2 if not self._hover else "#3a4766"), 1))
+            p.setBrush(QColor("#ffffff") if not self._hover else QColor(theme.SURFACE_2))
+            p.setPen(QPen(QColor(theme.BORDER if not self._hover else "#c9d0dc"), 1))
         p.drawRoundedRect(r, 12, 12)
         enabled = self.isEnabled()
-        p.setPen(QColor("#ffffff" if enabled else theme.TEXT_FAINT))
+        p.setPen(QColor(theme.ACCENT if self.isChecked() else (theme.TEXT if enabled else theme.TEXT_FAINT)))
         p.setFont(theme.font(15, QFont.Weight.Bold))
         p.drawText(QRectF(r.left(), r.top() + 18, r.width(), 24), Qt.AlignmentFlag.AlignCenter, self.title)
-        p.setPen(QColor("#dbe5ff" if self.isChecked() else theme.TEXT_DIM))
+        p.setPen(QColor("#3a64b8" if self.isChecked() else theme.TEXT_DIM))
         p.setFont(theme.font(12))
         p.drawText(QRectF(r.left() + 8, r.top() + 48, r.width() - 16, r.height() - 56),
                    int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap),
@@ -208,7 +206,7 @@ class ChipButton(QAbstractButton):
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setFixedHeight(40)
         self._hover = False
-        self.toggled.connect(lambda on: (glow(self, theme.DANGER, 22, 110, 0) if on
+        self.toggled.connect(lambda on: (glow(self, theme.DANGER, 18, 45, 1) if on
                                          else self.setGraphicsEffect(None)))
 
     def sizeHint(self):
@@ -229,20 +227,20 @@ class ChipButton(QAbstractButton):
         r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
         on = self.isChecked()
         if on:
-            p.setBrush(QColor(239, 90, 98, 34))
-            p.setPen(QPen(QColor(theme.DANGER), 1.4))
+            p.setBrush(QColor(theme.DANGER_SOFT))
+            p.setPen(QPen(QColor("#f0a2a8"), 1.4))
         else:
-            p.setBrush(QColor(theme.SURFACE_2 if not self._hover else "#1d2640"))
-            p.setPen(QPen(QColor(theme.BORDER_2 if not self._hover else "#3a4766"), 1))
+            p.setBrush(QColor("#ffffff" if not self._hover else theme.SURFACE_2))
+            p.setPen(QPen(QColor(theme.BORDER_2 if not self._hover else "#c3cad6"), 1))
         p.drawRoundedRect(r, 10, 10)
         name = "mic-off" if on and self.icon_name == "mic" else self.icon_name
-        col = "#ff9ea4" if on else theme.TEXT_DIM
+        col = theme.DANGER if on else theme.TEXT_DIM
         fm = self.fontMetrics()
         tw = fm.horizontalAdvance(self.text())
         total = 18 + 8 + tw
         x = r.center().x() - total / 2
         p.drawPixmap(QPointF(x, r.center().y() - 9), icons.pixmap(name, col, 18))
-        p.setPen(QColor("#ffd6d8" if on else theme.TEXT))
+        p.setPen(QColor(theme.DANGER if on else theme.TEXT))
         p.setFont(self.font())
         p.drawText(QRectF(x + 26, r.top(), tw + 4, r.height()), Qt.AlignmentFlag.AlignVCenter, self.text())
         p.end()
@@ -257,7 +255,7 @@ class PlayButton(QAbstractButton):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.playing = False
-        glow(self, theme.ACCENT, 28, 170, 2)
+        glow(self, theme.ACCENT, 22, 110, 3)
 
     def set_playing(self, v: bool):
         if v != self.playing:
@@ -270,11 +268,11 @@ class PlayButton(QAbstractButton):
         r = QRectF(self.rect()).adjusted(3, 3, -3, -3)
         g = QLinearGradient(r.topLeft(), r.bottomLeft())
         if self.isEnabled():
-            g.setColorAt(0, QColor("#5d97ff"))
-            g.setColorAt(1, QColor("#2a5ef0"))
+            g.setColorAt(0, QColor("#5a96ff"))
+            g.setColorAt(1, QColor("#2f6ee8"))
         else:
-            g.setColorAt(0, QColor("#2b3a62"))
-            g.setColorAt(1, QColor("#22305a"))
+            g.setColorAt(0, QColor("#c9d9f7"))
+            g.setColorAt(1, QColor("#b9cdf3"))
         p.setBrush(g)
         p.setPen(QPen(QColor(255, 255, 255, 40), 1))
         p.drawEllipse(r)
@@ -289,38 +287,25 @@ class PlayButton(QAbstractButton):
 # ============================================================== 로고 ===
 
 class LogoTile(QWidget):
+    """헤더 로고: 흰 타일 위 네잎클로버."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedSize(58, 58)
 
     def paintEvent(self, e):
+        from .clover import paint_clover
+
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        g = QLinearGradient(r.topLeft(), r.bottomRight())
-        g.setColorAt(0, QColor("#1d2747"))
-        g.setColorAt(1, QColor("#111830"))
+        g = QLinearGradient(r.topLeft(), r.bottomLeft())
+        g.setColorAt(0, QColor("#ffffff"))
+        g.setColorAt(1, QColor("#f2f6f3"))
         p.setBrush(g)
-        p.setPen(QPen(QColor("#2c3a62"), 1))
+        p.setPen(QPen(QColor(theme.BORDER), 1))
         p.drawRoundedRect(r, 15, 15)
-        heights = [0.22, 0.42, 0.62, 0.86, 0.6, 0.4, 0.24]
-        n = len(heights)
-        w = r.width() * 0.56
-        x0 = r.center().x() - w / 2
-        cols = [QColor("#4fd1ff"), QColor("#5b8cff"), QColor("#8b6dff"), QColor("#c26bff")]
-        for i, h in enumerate(heights):
-            x = x0 + i * w / (n - 1)
-            hh = r.height() * 0.62 * h
-            t = i / (n - 1)
-            idx = min(len(cols) - 2, int(t * (len(cols) - 1)))
-            lt = t * (len(cols) - 1) - idx
-            a, b = cols[idx], cols[idx + 1]
-            c = QColor(int(a.red() + (b.red() - a.red()) * lt), int(a.green() + (b.green() - a.green()) * lt),
-                       int(a.blue() + (b.blue() - a.blue()) * lt))
-            pen = QPen(c, 3.4)
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            p.setPen(pen)
-            p.drawLine(QPointF(x, r.center().y() - hh / 2), QPointF(x, r.center().y() + hh / 2))
+        paint_clover(p, r.adjusted(10, 9, -10, -11))
         p.end()
 
 
@@ -347,10 +332,10 @@ class Lcd(QFrame):
             col.addWidget(c)
             return col, v
 
-        c1, self.pos_lbl = block(20, "00:00.0", "POSITION", "#ffffff")
+        c1, self.pos_lbl = block(20, "00:00.0", "POSITION", theme.TEXT)
         slash = QLabel("/")
         slash.setStyleSheet(f"color:{theme.TEXT_FAINT}; font-size:16px;")
-        c2, self.len_lbl = block(15, "00:00", "LENGTH", "#c8cfdf")
+        c2, self.len_lbl = block(15, "00:00", "LENGTH", theme.TEXT_DIM)
         lay.addLayout(c1)
         lay.addWidget(slash, 0, Qt.AlignmentFlag.AlignTop)
         lay.addLayout(c2)
@@ -481,45 +466,35 @@ class WaveformView(QWidget):
         p = QPainter(pm)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         base = QColor(self.color)
-        if self._dim:
-            base = QColor(int(base.red() * .45 + 40), int(base.green() * .45 + 45), int(base.blue() * .45 + 60))
+        col = base.name()
         x0 = self.vp.to_x(0.0, w)
         x1 = self.vp.to_x(1.0, w)
         region = QRectF(max(x0, -20) + 0.5, 2.5, min(x1, w + 20) - max(x0, -20) - 1, h - 5)
         clip = QPainterPath()
         clip.addRoundedRect(region, 10, 10)
-
-        bg = QLinearGradient(0, region.top(), 0, region.bottom())
-        c1 = QColor(base)
-        c1.setAlpha(46 if not self._dim else 22)
-        c2 = QColor(base)
-        c2.setAlpha(18 if not self._dim else 10)
-        bg.setColorAt(0, c1)
-        bg.setColorAt(1, c2)
-        p.fillPath(clip, bg)
+        # 파스텔 배경 + 상단 라벨 띠
+        p.fillPath(clip, theme.tint(col, 0.05 if self._dim else 0.10))
         p.save()
         p.setClipPath(clip)
         strip = QRectF(region.left(), region.top(), region.width(), 22)
-        sc = QColor(base)
-        sc.setAlpha(80 if not self._dim else 36)
-        p.fillRect(strip, sc)
+        p.fillRect(strip, theme.tint(col, 0.08 if self._dim else 0.17))
         p.restore()
-        bc = QColor(base)
-        bc.setAlpha(150 if not self._dim else 60)
-        p.setPen(QPen(bc, 1))
+        p.setPen(QPen(theme.tint(col, 0.22 if self._dim else 0.42), 1))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawPath(clip)
 
         # 라벨 (보이는 영역 왼쪽에 고정)
         lx = max(region.left(), 0) + 10
         p.setFont(theme.font(13, QFont.Weight.Bold))
-        p.setPen(QColor("#ffffff" if not self._dim else theme.TEXT_DIM))
+        p.setPen(QColor(theme.TEXT_FAINT) if self._dim else theme.shade(col, 0.28))
         nw = p.fontMetrics().horizontalAdvance(self.name)
         p.drawText(QRectF(lx, strip.top(), nw + 4, strip.height()), Qt.AlignmentFlag.AlignVCenter, self.name)
         p.setFont(theme.font(12))
-        p.setPen(QColor(230, 236, 248, 200) if not self._dim else QColor(theme.TEXT_FAINT))
+        p.setPen(QColor(theme.TEXT_FAINT) if self._dim else theme.shade(col, 0.15))
         p.drawText(QRectF(lx + nw + 4, strip.top(), 300, strip.height()), Qt.AlignmentFlag.AlignVCenter,
                    f"·  {self.sub}")
+        if self._dim:
+            base = theme.tint(col, 0.35)
 
         if self._peaks is not None and len(self._peaks):
             area = QRectF(0, strip.bottom() + 3, w, region.bottom() - strip.bottom() - 6)
@@ -533,18 +508,13 @@ class WaveformView(QWidget):
             poly = QPolygonF(top + bot)
             p.save()
             p.setClipPath(clip)
-            hi = QColor(base).lighter(150)
-            lo = QColor(base).lighter(105)
-            if self._dim:
-                hi.setAlpha(140)
-                lo.setAlpha(110)
+            hi = QColor(base)
+            lo = QColor(base).lighter(118)
             wg = QLinearGradient(0, area.top(), 0, area.bottom())
             wg.setColorAt(0.0, lo)
             wg.setColorAt(0.5, hi)
             wg.setColorAt(1.0, lo)
-            gl = QColor(base)
-            gl.setAlpha(70 if not self._dim else 0)
-            p.setPen(QPen(gl, 2.5))
+            p.setPen(QPen(QColor(base), 0.8))
             p.setBrush(wg)
             p.drawPolygon(poly)
             p.restore()
@@ -560,7 +530,7 @@ class WaveformView(QWidget):
             x = self.vp.to_x(self._pos, self.width())
             if -1 <= x <= self.width() + 1:
                 p.setRenderHint(QPainter.RenderHint.Antialiasing)
-                p.setPen(QPen(QColor("#6aa0ff"), 1.6))
+                p.setPen(QPen(QColor(theme.ACCENT), 1.6))
                 p.drawLine(QPointF(x, 0), QPointF(x, self.height()))
         p.end()
 
@@ -638,7 +608,7 @@ class TimeRuler(QWidget):
         while t <= t1 + 1e-6:
             x = (t - t0) * pps
             if t >= 0 and -1 <= x <= w + 1:
-                p.setPen(QPen(QColor("#3a4560"), 1))
+                p.setPen(QPen(QColor("#c3cad6"), 1))
                 p.drawLine(QPointF(x, h - 9), QPointF(x, h - 1))
                 p.setPen(QColor(theme.TEXT_DIM))
                 m, s = divmod(t, 60)
@@ -648,15 +618,15 @@ class TimeRuler(QWidget):
                 for k in range(1, 4):
                     xs = x + step * k / 4 * pps
                     if xs < w:
-                        p.setPen(QPen(QColor("#283149"), 1))
+                        p.setPen(QPen(QColor("#e1e6ed"), 1))
                         p.drawLine(QPointF(xs, h - 5), QPointF(xs, h - 1))
             t += step
         x = self.vp.to_x(self._pos, w)
         if -6 <= x <= w + 6:
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor("#5b93ff"))
+            p.setBrush(QColor(theme.ACCENT))
             p.drawPolygon(QPolygonF([QPointF(x - 6, h - 12), QPointF(x + 6, h - 12), QPointF(x, h - 3)]))
-            p.setPen(QPen(QColor("#5b93ff"), 1.5))
+            p.setPen(QPen(QColor(theme.ACCENT), 1.5))
             p.drawLine(QPointF(x, h - 4), QPointF(x, h))
         p.end()
 
@@ -890,11 +860,11 @@ class DropZone(QFrame):
         lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.setSpacing(12)
         ic = QLabel()
-        ic.setPixmap(icons.pixmap("upload", theme.ACCENT_2, 44))
+        ic.setPixmap(icons.pixmap("upload", theme.ACCENT, 44))
         ic.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ic.setFixedSize(96, 96)
-        ic.setStyleSheet(f"background:{theme.rgba(theme.ACCENT, .12)}; border:1px solid "
-                         f"{theme.rgba(theme.ACCENT, .35)}; border-radius:48px;")
+        ic.setStyleSheet(f"background:{theme.ACCENT_SOFT}; border:1px solid "
+                         f"{theme.rgba(theme.ACCENT, .25)}; border-radius:48px;")
         t = QLabel("음악 파일을 여기로 끌어다 놓으세요")
         t.setAlignment(Qt.AlignmentFlag.AlignCenter)
         t.setStyleSheet("font-size:22px; font-weight:700;")
@@ -904,7 +874,7 @@ class DropZone(QFrame):
         btn = text_button("파일 선택", "folder", "primary", 46)
         btn.setFixedWidth(170)
         btn.clicked.connect(self.browseRequested)
-        glow(btn, theme.ACCENT, 26, 120, 2)
+        glow(btn, theme.ACCENT, 20, 70, 3)
         lay.addWidget(ic, 0, Qt.AlignmentFlag.AlignCenter)
         lay.addSpacing(4)
         lay.addWidget(t)
@@ -924,9 +894,9 @@ class DropZone(QFrame):
         p.setPen(QPen(QColor(theme.BORDER), 1))
         p.drawRoundedRect(r, 16, 16)
         inner = r.adjusted(22, 22, -22, -22)
-        pen = QPen(QColor(theme.ACCENT if self._hover else "#33405f"), 1.6, Qt.PenStyle.DashLine)
+        pen = QPen(QColor(theme.ACCENT if self._hover else "#c9d0dc"), 1.6, Qt.PenStyle.DashLine)
         pen.setDashPattern([5, 5])
         p.setPen(pen)
-        p.setBrush(QColor(61, 123, 255, 26) if self._hover else Qt.BrushStyle.NoBrush)
+        p.setBrush(QColor(52, 120, 246, 18) if self._hover else QColor(theme.SURFACE_2))
         p.drawRoundedRect(inner, 14, 14)
         p.end()

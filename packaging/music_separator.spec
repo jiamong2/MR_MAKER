@@ -18,7 +18,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 ROOT = Path(SPECPATH).resolve().parent  # noqa: F821 (SPECPATH 는 PyInstaller 제공)
 sys.path.insert(0, str(ROOT / "src"))
-from music_separator import APP_NAME, __version__  # noqa: E402
+from music_separator import APP_NAME, APP_SHORT, BUNDLE_ID, EXE_NAME, __version__  # noqa: E402
 
 IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
@@ -41,7 +41,8 @@ _skip = ("train", "solver", "evaluate", "grids", "distrib", "augment", "ema", "s
 hiddenimports = collect_submodules("demucs", filter=lambda n: n.split(".")[-1] not in _skip)
 hiddenimports += ["safetensors", "safetensors.torch", "yaml", "lameenc", "imageio_ffmpeg",
                   "sounddevice", "psutil", "certifi", "truststore", "music_separator.smoke",
-                  "music_separator.selftest"]
+                  "music_separator.selftest", "music_separator.roformer", "music_separator.pitch",
+                  "music_separator.export", "python_stretch", "python_stretch.Signalsmith", "julius"]
 
 excludes = [
     "tkinter", "matplotlib", "IPython", "jupyter", "notebook", "pytest", "torchaudio", "torchvision",
@@ -65,7 +66,7 @@ a = Analysis(  # noqa: F821
 )
 pyz = PYZ(a.pure)  # noqa: F821
 
-exe_name = "MusicSeparator"
+exe_name = EXE_NAME
 icon = str(ROOT / "assets" / ("icon.ico" if IS_WIN else "icon.icns" if IS_MAC else "icon.png"))
 
 version_file = None
@@ -78,8 +79,8 @@ if IS_WIN:
         ffi=FixedFileInfo(filevers=nums, prodvers=nums),
         kids=[
             StringFileInfo([StringTable("041204B0", [
-                StringStruct("CompanyName", APP_NAME),
-                StringStruct("FileDescription", f"{APP_NAME} - AI 음원 분리"),
+                StringStruct("CompanyName", "ui.clover"),
+                StringStruct("FileDescription", APP_NAME),
                 StringStruct("FileVersion", __version__),
                 StringStruct("InternalName", exe_name),
                 StringStruct("OriginalFilename", f"{exe_name}.exe"),
@@ -124,10 +125,10 @@ if IS_MAC:
         coll,
         name=f"{APP_NAME}.app",
         icon=icon,
-        bundle_identifier="io.github.musicseparator.app",
+        bundle_identifier=BUNDLE_ID,
         version=__version__,
         info_plist={
-            "CFBundleName": APP_NAME,
+            "CFBundleName": APP_SHORT,
             "CFBundleDisplayName": APP_NAME,
             "CFBundleShortVersionString": __version__,
             "CFBundleVersion": __version__,
@@ -138,7 +139,7 @@ if IS_MAC:
             "NSDesktopFolderUsageDescription": "바탕화면의 음악 파일을 열거나 분리 결과를 저장합니다.",
             "NSDocumentsFolderUsageDescription": "문서 폴더의 음악 파일을 열거나 분리 결과를 저장합니다.",
             "NSDownloadsFolderUsageDescription": "다운로드 폴더의 음악 파일을 열거나 분리 결과를 저장합니다.",
-            "NSHumanReadableCopyright": "Demucs © Meta Platforms (MIT)",
+            "NSHumanReadableCopyright": "ui.clover · Demucs © Meta Platforms (MIT)",
             "CFBundleDocumentTypes": [{
                 "CFBundleTypeName": "Audio",
                 "CFBundleTypeRole": "Viewer",

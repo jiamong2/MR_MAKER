@@ -47,6 +47,10 @@ class ModelSpec:
     approx_mb: int
     sources: tuple
     yaml_text: str
+    kind: str = "demucs"
+    file_name: str = ""    # kind == "roformer": 체크포인트 파일 이름
+    sha256: str = ""
+    urls: tuple = ()
 
 
 MODELS: dict[str, ModelSpec] = {
@@ -70,6 +74,15 @@ MODELS: dict[str, ModelSpec] = {
         ("5c90dfd2",), ("5c90dfd2-34c22ccb.th",), 55,
         ("drums", "bass", "other", "vocals", "guitar", "piano"),
         "models: ['5c90dfd2']\n",
+    ),
+    # BS-RoFormer SW (6-stem, jarredou). 커뮤니티 학습 모델 — 가중치 사용 조건 미표기 (개인용 권장)
+    "bs_roformer_sw": ModelSpec(
+        "bs_roformer_sw", "BS-RoFormer SW 6-Stem (고급)", "", (), (), 667,
+        ("bass", "drums", "other", "vocals", "guitar", "piano"), "",
+        kind="roformer", file_name="BS-Roformer-SW.ckpt",
+        sha256="24e7d35ee9c64415673d3fd33e06a67cac2c103c5df6267ba1576459c775916e",
+        urls=("https://github.com/nomadkaraoke/python-audio-separator/releases/download/model-configs/"
+              "BS-Roformer-SW.ckpt",),
     ),
 }
 
@@ -106,14 +119,22 @@ def search_dirs() -> list[Path]:
     return dirs
 
 
+def _installed_in(folder: Path, spec: ModelSpec) -> bool:
+    if not folder.is_dir():
+        return False
+    if spec.kind == "roformer":
+        f = folder / spec.file_name
+        return f.exists() and f.stat().st_size > spec.approx_mb * 1024 * 1024 * 0.9
+    return all(_sig_file(folder, s) for s in spec.sigs)
+
+
 def find_model_dir(name: str) -> Optional[Path]:
+    if name not in MODELS:   # 테스트용 내장 모델
+        return Path(".") if name.endswith("_unittest") or name.endswith("_unittest6") else None
     spec = MODELS[name]
     for root in search_dirs():
-        folder = root / name
-        if not folder.is_dir():
-            continue
-        if all(_sig_file(folder, s) for s in spec.sigs):
-            return folder
+        if _installed_in(root / name, spec):
+            return root / name
     return None
 
 
@@ -122,7 +143,9 @@ def is_installed(name: str) -> bool:
 
 
 def missing_download_mb(name: str) -> int:
-    return 0 if is_installed(name) else MODELS[name].approx_mb
+    if name not in MODELS or is_installed(name):
+        return 0
+    return MODELS[name].approx_mb
 
 
 # -------------------------------------------------------------- download ---
@@ -194,6 +217,8 @@ def download_model(name: str, progress: Optional[ProgressCb] = None,
     spec = MODELS[name]
     folder = user_models_dir() / name
     folder.mkdir(parents=True, exist_ok=True)
+    if spec.kind == "roformer":
+        return _download_single(spec, folder, progress, cancel)
     (folder / f"{name}.yaml").write_text(spec.yaml_text, encoding="utf-8")
 
     hf = os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/")
@@ -242,6 +267,42 @@ def download_model(name: str, progress: Optional[ProgressCb] = None,
     return folder
 
 
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _download_single(spec: ModelSpec, folder: Path, progress: Optional[ProgressCb],
+                     cancel: Optional[threading.Event]) -> Path:
+    dest = folder / spec.file_name
+    total = spec.approx_mb * 1024 * 1024
+    errors = []
+    urls = list(spec.urls)
+    extra = os.environ.get("MUSIC_SEPARATOR_ROFORMER_URL")
+    if extra:
+        urls.insert(0, extra)
+    for url in urls:
+        try:
+            _download(url, dest, "고급 AI 모델 다운로드", progress, cancel, 0, total)
+            if spec.sha256 and _sha256(dest) != spec.sha256:
+                dest.unlink(missing_ok=True)
+                raise ModelError("체크섬 불일치 (파일 손상 또는 다른 파일)")
+            if progress:
+                progress(total, total, "다운로드 완료")
+            return folder
+        except DownloadCancelled:
+            raise
+        except Exception as exc:
+            log.warning("download failed %s: %s", url, exc)
+            errors.append(str(exc))
+    raise ModelError("고급 AI 모델을 다운로드하지 못했습니다. 인터넷 연결을 확인해 주세요.\n\n"
+                     "인터넷이 없는 PC 라면, 다른 PC 에서 받은 models 폴더를\n"
+                     f"{user_models_dir()} 에 복사하면 됩니다.\n\n" + "\n".join(errors))
+
+
 def remove_partial_downloads() -> None:
     for p in user_models_dir().rglob("*.part"):
         p.unlink(missing_ok=True)
@@ -258,11 +319,26 @@ def load_model(name: str):
     with _cache_lock:
         if name in _model_cache:
             return _model_cache[name]
-        if name == "demucs_unittest":  # 테스트용 초소형 무작위 모델
+        if name in ("demucs_unittest", "demucs_unittest6"):  # 테스트용 초소형 무작위 모델
+            import torch
             from demucs.apply import BagOfModels
-            from demucs.pretrained import demucs_unittest
+            from demucs.hdemucs import HDemucs
 
-            model = BagOfModels([demucs_unittest()])
+            torch.manual_seed(0)
+            srcs = ["drums", "bass", "other", "vocals"] + (["guitar", "piano"] if name.endswith("6") else [])
+            model = BagOfModels([HDemucs(channels=4, sources=srcs)])
+            model.eval()
+            _model_cache[name] = model
+            return model
+        if name == "roformer_unittest":  # 테스트용 초소형 무작위 RoFormer (구조만 동일)
+            import torch
+
+            from .roformer import SW_CONFIG, SW_INSTRUMENTS, BSRoformer
+
+            torch.manual_seed(0)
+            cfg = dict(SW_CONFIG, dim=16, depth=1, dim_head=8, heads=2)
+            model = BSRoformer(**cfg)
+            model.instruments = SW_INSTRUMENTS
             model.eval()
             _model_cache[name] = model
             return model
@@ -270,6 +346,18 @@ def load_model(name: str):
         if folder is None:
             raise ModelError(f"모델 '{name}' 이(가) 설치되어 있지 않습니다.")
         spec = MODELS[name]
+        if spec.kind == "roformer":
+            from .roformer import SW_INSTRUMENTS, load_sw
+
+            try:
+                model = load_sw(folder / spec.file_name)
+            except Exception as exc:
+                raise ModelError(
+                    f"고급 AI 모델 파일을 읽을 수 없습니다 (손상되었을 수 있음): {spec.file_name}\n"
+                    f"해당 파일을 삭제하고 다시 시도하면 새로 다운로드합니다.\n({exc})") from exc
+            model.instruments = SW_INSTRUMENTS
+            _model_cache[name] = model
+            return model
         yaml_path = folder / f"{name}.yaml"
         bag = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) if yaml_path.exists() \
             else yaml.safe_load(spec.yaml_text)
@@ -313,6 +401,13 @@ def clear_cache() -> None:
 def copy_into_user_dir(src_root: Path) -> list[str]:
     """외부 폴더(다른 PC 에서 복사한 models)에서 모델을 가져오기."""
     imported = []
+    src_root = Path(src_root)
+    for spec in MODELS.values():   # 체크포인트 파일만 있는 경우 (예: BS-Roformer-SW.ckpt)
+        if spec.kind == "roformer" and (src_root / spec.file_name).is_file():
+            dst = user_models_dir() / spec.name
+            dst.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_root / spec.file_name, dst / spec.file_name)
+            imported.append(spec.name)
     for name in MODELS:
         src = Path(src_root) / name
         if src.is_dir():

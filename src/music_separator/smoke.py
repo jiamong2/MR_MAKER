@@ -99,8 +99,23 @@ class GuiSmoke:
             w.export_mr()
             self.step = "export_mr"
         elif self.step == "export_mr":
+            # 키 조절: +2 → 재생 트랙이 변환될 때까지 기다린 뒤, 키가 반영된 MR 저장
+            w.key_slider.setValue(2)
+            w._apply_key()
+            self.key_wait = time.monotonic()
+            self.step = "key"
+        elif self.step == "key":
+            if w.key_semitones != 2:
+                if time.monotonic() - self.key_wait > 300:
+                    return self._finish(False, "key shift timeout")
+                return
+            self._log(f"key +2 applied to {len(w.mixer.tracks)} tracks")
+            w.fmt_combo.setCurrentIndex(w.fmt_combo.findData("wav24"))
+            w.export_mr()
+            self.step = "export_key"
+        elif self.step == "export_key":
             files = list((self.work / "out").rglob("*.*"))
             self._log(f"exported {len(files)} files")
             self.step = "done"
-            ok = len(files) >= 5
+            ok = len(files) >= 6 and any("Key +2" in f.name for f in files)
             return self._finish(ok, "" if ok else "missing exports")

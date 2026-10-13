@@ -6,9 +6,9 @@
   python scripts/build.py --variant cuda           # (Windows) 이름표만 cuda 로 — torch CUDA 빌드는 미리 설치
 
 결과물: dist/release/
-  Windows : MusicSeparator-<ver>-windows-x64-<variant>-setup.exe, ...-portable.zip
-  macOS   : MusicSeparator-<ver>-macos-<arch>.dmg
-  Linux   : MusicSeparator-<ver>-linux-x86_64.tar.gz  (개발 확인용)
+  Windows : MRMaker-<ver>-windows-x64-<variant>-setup.exe, ...-portable.zip
+  macOS   : MRMaker-<ver>-macos-<arch>.dmg
+  Linux   : MRMaker-<ver>-linux-x86_64.tar.gz  (개발 확인용)
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from music_separator import APP_NAME, __version__  # noqa: E402
+from music_separator import APP_NAME, EXE_NAME, __version__  # noqa: E402
 
 DIST = ROOT / "dist"
 RELEASE = DIST / "release"
@@ -77,14 +77,14 @@ def win_sign(files: list[Path]) -> None:
 
 
 def package_windows(variant: str, skip_installer: bool):
-    src = DIST / "MusicSeparator"
-    win_sign([src / "MusicSeparator.exe"])
-    zip_path = RELEASE / f"MusicSeparator-{__version__}-windows-x64-{variant}-portable.zip"
+    src = DIST / EXE_NAME
+    win_sign([src / f"{EXE_NAME}.exe"])
+    zip_path = RELEASE / f"{EXE_NAME}-{__version__}-windows-x64-{variant}-portable.zip"
     print(f"portable zip -> {zip_path}")
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as z:
         for f in src.rglob("*"):
             if f.is_file():
-                z.write(f, Path("MusicSeparator") / f.relative_to(src))
+                z.write(f, Path(EXE_NAME) / f.relative_to(src))
     if skip_installer:
         return
     iscc = find_iscc()
@@ -93,13 +93,13 @@ def package_windows(variant: str, skip_installer: bool):
         return
     run([iscc, f"/DAppVersion={__version__}", f"/DSourceDir={src}", f"/DVariant={variant}",
          f"/DOutputDir={RELEASE}", ROOT / "packaging" / "windows" / "installer.iss"])
-    win_sign(sorted(RELEASE.glob(f"MusicSeparator-{__version__}-windows-x64-{variant}-setup*.exe")))
+    win_sign(sorted(RELEASE.glob(f"{EXE_NAME}-{__version__}-windows-x64-{variant}-setup*.exe")))
 
 
 def package_macos():
     app = DIST / f"{APP_NAME}.app"
     arch = os.environ.get("MS_TARGET_ARCH") or platform.machine()
-    dmg = RELEASE / f"MusicSeparator-{__version__}-macos-{arch}.dmg"
+    dmg = RELEASE / f"{EXE_NAME}-{__version__}-macos-{arch}.dmg"
     # 데이터로 포함된 ffmpeg 에 실행 권한 보장
     for f in app.rglob("ffmpeg-*"):
         f.chmod(0o755)
@@ -108,14 +108,14 @@ def package_macos():
     else:
         print("서명 인증서 없음 → ad-hoc 서명 (다른 Mac 에서 처음 실행 시 '확인되지 않은 개발자' 경고)")
         run(["codesign", "--force", "--deep", "--sign", "-", app])
-        run(["bash", ROOT / "packaging" / "macos" / "make_dmg.sh", app, dmg])
+        run(["bash", ROOT / "packaging" / "macos" / "make_dmg.sh", app, dmg, APP_NAME])
 
 
 def package_linux():
-    src = DIST / "MusicSeparator"
-    out = RELEASE / f"MusicSeparator-{__version__}-linux-{platform.machine()}.tar.gz"
+    src = DIST / EXE_NAME
+    out = RELEASE / f"{EXE_NAME}-{__version__}-linux-{platform.machine()}.tar.gz"
     with tarfile.open(out, "w:gz") as t:
-        t.add(src, arcname="MusicSeparator")
+        t.add(src, arcname=EXE_NAME)
     print(f"tarball -> {out}")
 
 

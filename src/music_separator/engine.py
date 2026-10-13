@@ -26,14 +26,14 @@ log = logging.getLogger(__name__)
 
 # 표시 이름(한국어, 영어), 색상
 STEM_STYLE = {
-    "vocals":       ("보컬", "Vocals", "#F5A623"),
-    "instrumental": ("반주", "Instrumental", "#7B8CFF"),
-    "drums":        ("드럼", "Drums", "#3FB8F0"),
-    "bass":         ("베이스", "Bass", "#B57BFF"),
-    "guitar":       ("기타", "Guitar", "#5BD08A"),
-    "piano":        ("피아노", "Piano", "#FF7EB6"),
-    "other":        ("기타 악기", "Other", "#8FA3B0"),
-    "original":     ("원본", "Original", "#C9CED6"),
+    "vocals":       ("보컬", "Vocals", "#f29d12"),
+    "instrumental": ("반주", "Instrumental", "#5b6cf0"),
+    "drums":        ("드럼", "Drums", "#2f8ff0"),
+    "bass":         ("베이스", "Bass", "#9b51f0"),
+    "guitar":       ("기타", "Guitar", "#22b573"),
+    "piano":        ("피아노", "Piano", "#ee4f92"),
+    "other":        ("기타 악기", "Other", "#7d889b"),
+    "original":     ("원본", "Original", "#8f98a8"),
 }
 
 
@@ -42,25 +42,56 @@ class Mode:
     key: str
     title: str
     description: str
-    model: str
-    hq_model: str
-    hq_shifts: int
-    outputs: tuple
-    note: str = ""
+    outputs: tuple       # 마지막 트랙은 항상 "원본 − 나머지 트랙" (트랙 합 = 원본)
 
 
 MODES: dict[str, Mode] = {
-    "2": Mode("2", "2-Stem", "보컬 / 반주", "htdemucs", "htdemucs_ft", 1,
-              ("vocals", "instrumental"),
-              "노래방 MR이나 보컬만 필요할 때 가장 깔끔합니다."),
-    "4": Mode("4", "4-Stem", "보컬 / 드럼 / 베이스 / 기타 악기", "htdemucs", "htdemucs_ft", 1,
-              ("vocals", "drums", "bass", "other"),
-              "Demucs가 가장 잘하는 기본 분리입니다. 기타·피아노 등은 '기타 악기'에 함께 들어갑니다."),
-    "6": Mode("6", "6-Stem", "보컬 / 드럼 / 베이스 / 기타 / 피아노 / 나머지", "htdemucs_6s", "htdemucs_6s", 2,
-              ("vocals", "drums", "bass", "guitar", "piano", "other"),
-              "실험적 모델입니다. 피아노는 다른 악기 소리가 섞이거나 작게 분리되는 경우가 많고, "
-              "기타는 비교적 양호합니다. 보컬·드럼·베이스 품질은 4-Stem과 비슷합니다."),
+    "2": Mode("2", "2-Stem", "보컬 / 반주", ("vocals", "instrumental")),
+    "4": Mode("4", "4-Stem", "보컬 / 드럼 / 베이스 / 기타 악기", ("vocals", "drums", "bass", "other")),
+    "6": Mode("6", "6-Stem", "보컬 / 드럼 / 베이스 / 기타 / 피아노 / 나머지",
+              ("vocals", "drums", "bass", "guitar", "piano", "other")),
 }
+
+
+@dataclass(frozen=True)
+class Engine:
+    key: str
+    title: str
+    short: str
+    note: str
+
+
+ENGINES: dict[str, Engine] = {
+    "demucs": Engine("demucs", "표준 (Demucs)", "Demucs",
+                     "Meta의 Demucs 모델. 빠르고 안정적이며 상업적 사용에 문제가 없는 MIT 라이선스입니다."),
+    "roformer": Engine("roformer", "고급 (BS-RoFormer)", "RoFormer",
+                       "피아노·기타 분리가 크게 좋아지는 최신 모델입니다. 처리량이 많아 GPU를 권장하며, "
+                       "모델 사용 조건이 명시되지 않은 커뮤니티 모델이라 개인 용도로 사용하세요."),
+}
+
+# 처리 설정
+DEMUCS_OVERLAP = {False: 0.25, True: 0.5}          # 구간 겹침 (고품질 = 경계 잡음 감소)
+SIX_SHIFTS = {False: 1, True: 2}                    # 6-Stem 2단계(기타/피아노) 시간 이동 평균 횟수
+ROFORMER_OVERLAP = {False: 2, True: 4}
+
+
+def plan_models(engine: str, mode_key: str, high_quality: bool, override: Optional[str] = None) -> dict:
+    """역할별 필요한 모델 이름. main = 1단계 분리, six = 6-Stem 2단계(기타·피아노)."""
+    if engine == "roformer":
+        return {"roformer": override or "bs_roformer_sw"}
+    if override == "demucs_unittest":
+        plan = {"main": "demucs_unittest"}
+        if mode_key == "6":
+            plan["six"] = "demucs_unittest6"
+        return plan
+    plan = {"main": override or ("htdemucs_ft" if high_quality else "htdemucs")}
+    if mode_key == "6":
+        plan["six"] = "htdemucs_6s"
+    return plan
+
+
+def required_models(engine: str, mode_key: str, high_quality: bool, override: Optional[str] = None) -> list:
+    return list(dict.fromkeys(plan_models(engine, mode_key, high_quality, override).values()))
 
 
 def stem_label(key: str, mode_key: str = "4") -> str:
@@ -76,15 +107,6 @@ def stem_english(key: str) -> str:
 
 def stem_color(key: str) -> str:
     return STEM_STYLE[key][2]
-
-
-def model_for(mode_key: str, high_quality: bool) -> str:
-    m = MODES[mode_key]
-    return m.hq_model if high_quality else m.model
-
-
-def shifts_for(mode_key: str, high_quality: bool) -> int:
-    return MODES[mode_key].hq_shifts if high_quality else 1
 
 
 class SeparationCancelled(Exception):
@@ -105,13 +127,15 @@ class StemResult:
 @dataclass
 class SeparationResult:
     mode: str
-    model: str
+    model: str          # 사용한 모델 이름들 (표시용)
     device: str
     stems: list[StemResult]
     n_samples: int
     seconds: float
     elapsed: float
     notices: list[str] = field(default_factory=list)
+    engine: str = "demucs"
+    raw_recon_error: float = 0.0    # 모델 출력 합과 원본의 차이 (자가진단용)
 
 
 ProgressCb = Callable[[float, str], None]
@@ -145,11 +169,97 @@ def _is_gpu_problem(exc: BaseException) -> bool:
     return not isinstance(exc, (SeparationCancelled, MemoryError, KeyboardInterrupt))
 
 
+class _Progress:
+    """여러 단계로 나뉜 작업의 전체 진행률/남은 시간 계산."""
+
+    def __init__(self, report: Callable[[float, str], None], stages: list[tuple[str, float]]):
+        self.report = report
+        self.stages = stages
+        total = sum(w for _, w in stages) or 1.0
+        self.offsets, acc = [], 0.0
+        for _, w in stages:
+            self.offsets.append(acc / total)
+            acc += w
+        self.weights = [w / total for _, w in stages]
+        self.idx = 0
+        self.t0 = time.monotonic()
+        self.last = 0.0
+        self.device = "cpu"
+
+    def stage(self, i: int):
+        self.idx = i
+        self.update(0.0, force=True)
+
+    def update(self, frac: float, force: bool = False):
+        now = time.monotonic()
+        if not force and now - self.last < 0.15:
+            return
+        self.last = now
+        overall = self.offsets[self.idx] + self.weights[self.idx] * max(0.0, min(1.0, frac))
+        overall = 0.04 + 0.9 * overall
+        eta = ""
+        el = now - self.t0
+        if overall > 0.08 and el > 3:
+            eta = f" · 남은 시간 약 {_fmt_eta(el / (overall - 0.04) * (0.94 - overall))}"
+        label = self.stages[self.idx][0]
+        self.report(overall, f"{label} ({self.device.upper()}) {frac * 100:.0f}%{eta}")
+
+
+def _run_demucs(model, mix: np.ndarray, device: str, shifts: int, overlap: float,
+                cancel: threading.Event, on_progress: Callable[[float], None]) -> dict:
+    """Demucs 모델 실행 → {source: (n, 2) ndarray}."""
+    import torch
+    from demucs.apply import apply_model
+
+    n = len(mix)
+    wav = torch.from_numpy(np.ascontiguousarray(np.asarray(mix, dtype=np.float32).T))
+    ref = wav.mean(0)
+    mean, std = ref.mean(), ref.std() + 1e-8
+    wav = (wav - mean) / std
+    subs = list(getattr(model, "models", [model]))
+    est = 0
+    for sub in subs:
+        seg_len = int(sub.samplerate * float(getattr(sub, "segment", 8.0)))
+        stride = max(1, int((1 - overlap) * seg_len))
+        length = n + (int(0.5 * sub.samplerate) if shifts else 0)
+        est += max(1, math.ceil(length / stride)) * max(1, shifts)
+    done = [0]
+
+    def callback(d: dict) -> None:
+        if cancel.is_set():
+            raise SeparationCancelled()
+        if d.get("state") == "end":
+            done[0] += 1
+            on_progress(min(0.99, done[0] / est))
+
+    out = apply_model(model, wav[None], device=device, shifts=shifts, split=True, overlap=overlap,
+                      progress=False, num_workers=0, callback=callback)
+    if not torch.isfinite(out).all():
+        raise SeparationError(f"{device.upper()} 처리 결과에 잘못된 값(NaN)이 포함되었습니다.")
+    out = (out[0] * std + mean).cpu().numpy()
+    return {name: np.ascontiguousarray(out[i].T, dtype=np.float32) for i, name in enumerate(model.sources)}
+
+
+def _run_roformer(model, mix: np.ndarray, device: str, overlap: int, cancel: threading.Event,
+                  on_progress: Callable[[float], None]) -> dict:
+    from . import roformer
+
+    try:
+        out = roformer.demix(model, mix, device, num_overlap=overlap, progress=on_progress, cancel=cancel)
+    except roformer.Cancelled as exc:
+        raise SeparationCancelled() from exc
+    if not np.isfinite(out).all():
+        raise SeparationError(f"{device.upper()} 처리 결과에 잘못된 값(NaN)이 포함되었습니다.")
+    names = getattr(model, "instruments", roformer.SW_INSTRUMENTS)
+    return {name: out[i] for i, name in enumerate(names)}
+
+
 def separate(
     mix: np.ndarray,
     mode_key: str,
     out_dir: Path,
     *,
+    engine: str = "demucs",
     high_quality: bool = False,
     device: str = "cpu",
     model_name: Optional[str] = None,
@@ -157,14 +267,14 @@ def separate(
     cancel: Optional[threading.Event] = None,
     notice: Optional[Callable[[str], None]] = None,
 ) -> SeparationResult:
-    """mix: (samples, 2) float32 (memmap 가능). 결과 트랙은 out_dir 에 .npy 로 저장."""
-    import torch
-    from demucs.apply import apply_model
+    """mix: (samples, 2) float32 44.1kHz (memmap 가능). 결과 트랙은 out_dir 에 .npy 로 저장.
 
+    마지막 트랙(반주/기타 악기/나머지)은 "원본 − 다른 트랙들"로 계산하므로
+    모든 트랙을 더하면 원본과 정확히 같습니다 (분리 과정에서 소리가 사라지지 않음).
+    """
     t0 = time.monotonic()
     mode = MODES[mode_key]
-    model_name = model_name or model_for(mode_key, high_quality)
-    shifts = shifts_for(mode_key, high_quality)
+    plan = plan_models(engine, mode_key, high_quality, model_name)
     cancel = cancel or threading.Event()
     notices: list[str] = []
 
@@ -176,67 +286,53 @@ def separate(
         if cancel.is_set():
             raise SeparationCancelled()
 
+    if engine == "roformer":
+        stages = [("분리 중 · BS-RoFormer", 1.0)]
+    else:
+        main_cost = 4.0 if "ft" in plan["main"] else 1.0
+        main_cost *= 2.0 if high_quality else 1.0
+        stages = [("분리 중 · 보컬/드럼/베이스", main_cost)]
+        if "six" in plan:
+            stages.append(("분리 중 · 기타/피아노", 1.0 * SIX_SHIFTS[high_quality]))
+    prog = _Progress(report, stages)
+
     report(0.01, "AI 모델 불러오는 중…")
-    model = model_store.load_model(model_name)
+    loaded = {role: model_store.load_model(name) for role, name in plan.items()}
     check_cancel()
+    mix = np.asarray(mix, dtype=np.float32)
 
-    n = len(mix)
-    wav = torch.from_numpy(np.ascontiguousarray(np.asarray(mix, dtype=np.float32).T))
-    ref = wav.mean(0)
-    mean = ref.mean()
-    std = ref.std() + 1e-8
-    wav = (wav - mean) / std
+    def pipeline(dev: str) -> dict:
+        prog.device = dev
+        if engine == "roformer":
+            prog.stage(0)
+            raw = _run_roformer(loaded["roformer"], mix, dev, ROFORMER_OVERLAP[high_quality], cancel, prog.update)
+            _release(loaded["roformer"], dev)
+            return raw
+        prog.stage(0)
+        raw = _run_demucs(loaded["main"], mix, dev, 1, DEMUCS_OVERLAP[high_quality], cancel, prog.update)
+        _release(loaded["main"], dev)
+        if "six" in loaded:
+            # 2단계: '기타 악기' 트랙만 6-Stem 모델에 넣어 기타·피아노를 추가로 분리
+            check_cancel()
+            prog.stage(1)
+            sub = _run_demucs(loaded["six"], raw["other"], dev, SIX_SHIFTS[high_quality],
+                              DEMUCS_OVERLAP[high_quality], cancel, prog.update)
+            _release(loaded["six"], dev)
+            raw["guitar"] = sub.get("guitar", np.zeros_like(mix))
+            raw["piano"] = sub.get("piano", np.zeros_like(mix))
+        return raw
 
-    # 진행률 계산용 예상 세그먼트 수
-    subs = list(getattr(model, "models", [model]))
-    est_total = 0
-    for sub in subs:
-        seg = float(getattr(sub, "segment", 8.0))
-        seg_len = int(sub.samplerate * seg)
-        stride = max(1, int(0.75 * seg_len))
-        length = n + (int(0.5 * sub.samplerate) if shifts else 0)
-        est_total += max(1, math.ceil(length / stride)) * max(1, shifts)
-    done = [0]
-    last_emit = [0.0]
-
-    def callback(d: dict) -> None:
-        if cancel.is_set():
-            raise SeparationCancelled()
-        if d.get("state") == "end":
-            done[0] += 1
-            now = time.monotonic()
-            if now - last_emit[0] > 0.15:
-                last_emit[0] = now
-                frac = min(0.99, done[0] / est_total)
-                elapsed = now - t_run[0]
-                eta = ""
-                if done[0] >= 3 and frac > 0.02:
-                    remain = elapsed / frac * (1 - frac)
-                    eta = f" · 남은 시간 약 {_fmt_eta(remain)}"
-                report(0.05 + 0.88 * frac, f"분리 중 ({run_device[0].upper()}) {frac * 100:.0f}%{eta}")
-
-    run_device = [device]
-    t_run = [time.monotonic()]
-
-    def run(dev: str):
-        done[0] = 0
-        run_device[0] = dev
-        t_run[0] = time.monotonic()
-        report(0.05, f"분리 시작 ({dev.upper()})…")
-        out = apply_model(model, wav[None], device=dev, shifts=shifts, split=True,
-                          overlap=0.25, progress=False, num_workers=0, callback=callback)
-        if not torch.isfinite(out).all():
-            raise SeparationError(f"{dev.upper()} 처리 결과에 잘못된 값(NaN)이 포함되었습니다.")
-        return out
-
+    run_device = device
     try:
-        out = run(device)
+        raw = pipeline(device)
     except SeparationCancelled:
-        _release(model, device)
+        for m in loaded.values():
+            _release(m, device)
         raise
     except Exception as exc:
         if device == "cpu" or not _is_gpu_problem(exc):
-            _release(model, device)
+            for m in loaded.values():
+                _release(m, device)
             raise
         log.exception("GPU(%s) 처리 실패, CPU 로 재시도", device)
         msg = (f"GPU({device.upper()}) 처리 중 문제가 발생하여 CPU로 다시 처리합니다. "
@@ -244,37 +340,47 @@ def separate(
         notices.append(msg)
         if notice:
             notice(msg)
-        _release(model, device)
+        for m in loaded.values():
+            _release(m, device)
         check_cancel()
         # GPU 에서 실패한 모델 객체는 상태를 신뢰할 수 없으므로 디스크에서 새로 불러옴
-        model_store.forget(model_name)
-        model = model_store.load_model(model_name)
-        out = run("cpu")
-    _release(model, run_device[0])
+        for role, name in plan.items():
+            model_store.forget(name)
+            loaded[role] = model_store.load_model(name)
+        run_device = "cpu"
+        raw = pipeline("cpu")
     check_cancel()
 
-    out = out[0] * std + mean  # (sources, 2, n)
-    sources = list(model.sources)
-    report(0.94, "트랙 저장 중…")
+    # 모델 출력 합 vs 원본 (진단용)
+    base_keys = [k for k in ("vocals", "drums", "bass", "other") if k in raw]
+    if engine == "roformer":
+        base_keys += [k for k in ("guitar", "piano") if k in raw]
+    raw_sum = sum(raw[k] for k in base_keys)
+    recon = float(np.linalg.norm(raw_sum - mix) / (np.linalg.norm(mix) + 1e-9))
+    del raw_sum
+
+    report(0.95, "트랙 저장 중…")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-
+    explicit = mode.outputs[:-1]
+    residual_key = mode.outputs[-1]
     stems: list[StemResult] = []
-    for key in mode.outputs:
+    acc = np.zeros_like(mix)
+    for key in explicit:
         check_cancel()
-        if key == "instrumental":
-            tensor = sum(out[i] for i, s in enumerate(sources) if s != "vocals")
-        else:
-            tensor = out[sources.index(key)]
-        arr = np.ascontiguousarray(tensor.T.cpu().numpy(), dtype=np.float32)
+        arr = np.ascontiguousarray(raw[key], dtype=np.float32)
+        acc += arr
         path = out_dir / f"{key}.npy"
         np.save(path, arr)
         stems.append(StemResult(key, path, compute_peaks(arr)))
-        del arr
-    del out
+    residual = mix - acc
+    path = out_dir / f"{residual_key}.npy"
+    np.save(path, residual)
+    stems.append(StemResult(residual_key, path, compute_peaks(residual)))
+    del raw, acc, residual
     report(1.0, "완료")
-    return SeparationResult(mode_key, model_name, run_device[0], stems, n, n / 44100.0,
-                            time.monotonic() - t0, notices)
+    return SeparationResult(mode_key, " + ".join(dict.fromkeys(plan.values())), run_device, stems, len(mix),
+                            len(mix) / 44100.0, time.monotonic() - t0, notices, engine, recon)
 
 
 def _release(model, device: str) -> None:

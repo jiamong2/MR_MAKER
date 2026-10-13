@@ -7,7 +7,7 @@
 #   A) APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD   (appleid.apple.com 에서 만든 앱 암호)
 #   B) NOTARY_KEY_PATH(.p8), NOTARY_KEY_ID, NOTARY_ISSUER_ID   (App Store Connect API 키)
 #
-# 사용: packaging/macos/sign_and_notarize.sh "dist/Music Separator.app" dist/release/MusicSeparator.dmg
+# 사용: packaging/macos/sign_and_notarize.sh "dist/MR MAKER for ui.clover.app" dist/release/MRMaker.dmg
 set -euo pipefail
 APP="$1"
 DMG="$2"
@@ -63,7 +63,7 @@ else
 fi
 
 echo "== 5/5 DMG 생성/서명"
-"$HERE/make_dmg.sh" "$APP" "$DMG"
+"$HERE/make_dmg.sh" "$APP" "$DMG" "$(basename "$APP" .app)"
 codesign --force --timestamp --sign "$ID" "$DMG"
 if [[ $CAN_NOTARIZE == 1 ]]; then
   notarize "$DMG"

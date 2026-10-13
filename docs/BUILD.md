@@ -1,6 +1,6 @@
 # 개발 · 빌드 · 배포 가이드
 
-이 문서는 Music Separator 를 수정하고 다시 빌드·배포하는 방법을 설명합니다.
+이 문서는 MR MAKER for ui.clover (내부 패키지 이름 `music_separator`) 를 수정하고 다시 빌드·배포하는 방법을 설명합니다.
 
 - [1. 구조 한눈에 보기](#1-구조-한눈에-보기)
 - [2. 소스에서 실행하기](#2-소스에서-실행하기)
@@ -21,15 +21,18 @@ music-separator/
 ├─ run.py                         진입점 (소스 실행 / PyInstaller 공용)
 ├─ src/music_separator/
 │  ├─ app.py                      앱 시작, 로깅, 명령행 옵션(--selftest, --gui-smoke)
-│  ├─ engine.py                   Demucs 분리 엔진: 모드 정의, GPU→CPU 폴백, 진행률, 취소
-│  ├─ models.py                   모델 탐색/다운로드(HuggingFace → Meta 서버)/로드/캐시
-│  ├─ audio_io.py                 FFmpeg 디코딩, WAV/MP3 저장
+│  ├─ engine.py                   분리 엔진: 모드·엔진 정의, Demucs 2단계 6-Stem, 잔차 트랙, GPU→CPU 폴백, 진행률, 취소
+│  ├─ roformer.py                 고급 엔진 BS-RoFormer 구현(SW 가중치 호환) + 겹침 청크 처리
+│  ├─ models.py                   모델 탐색/다운로드(HuggingFace → Meta 서버, RoFormer 는 GitHub + SHA256)/로드/캐시
+│  ├─ audio_io.py                 FFmpeg 디코딩, 리샘플, WAV 16/24/32f · FLAC · MP3 저장
+│  ├─ export.py                   저장 계산: 원본 − 뺀 트랙(MR), 원본 샘플레이트, 키 조절, 클리핑 방지
+│  ├─ pitch.py                    키 조절(Signalsmith Stretch, python-stretch)
 │  ├─ player.py                   멀티트랙 믹서(뮤트/솔로/볼륨) + sounddevice 재생
 │  ├─ dsp.py                      파형 피크 계산, 믹스다운(MR)
 │  ├─ system.py                   GPU 감지, 메모리/디스크 요구량 계산
 │  ├─ paths.py                    OS 별 데이터/캐시/리소스 경로
 │  ├─ selftest.py / smoke.py      빌드 결과물 자동 검증 (CI 에서 사용)
-│  └─ ui/                         PySide6 화면 (main_window, widgets, workers, theme)
+│  └─ ui/                         PySide6 화면 (main_window, widgets, workers, theme, clover = 아이콘 벡터 그림)
 ├─ tests/                         pytest 테스트 (GPU·인터넷·오디오 장치 없이 실행)
 ├─ requirements/                  플랫폼별 의존성 (torch 는 OS 마다 다름)
 ├─ packaging/
@@ -40,13 +43,15 @@ music-separator/
 │  ├─ build.py                    빌드 + 패키징 (로컬/CI 공용)
 │  ├─ fetch_models.py             모델 미리 받기 (번들/오프라인용)
 │  └─ make_icons.py               아이콘 생성
-├─ assets/                        아이콘, 체크 이미지
+├─ assets/                        아이콘, 체크 이미지, Pretendard 글꼴
 └─ .github/workflows/build.yml    자동 빌드 · 테스트 · 릴리스
 ```
 
-동작 흐름: 파일 열기 → `LoadThread` 가 FFmpeg 로 44.1kHz 스테레오 float32 로 디코딩해 캐시 폴더에 `.npy` 저장 →
-`SeparationThread` 가 (필요시 모델 다운로드 후) `engine.separate()` 실행 → 결과 트랙을 `.npy` 로 저장하고
-메모리 매핑(memmap)으로 재생/저장 → `ExportThread` 가 WAV/MP3 로 저장. 무거운 작업은 모두 별도 스레드라 UI 가 멈추지 않습니다.
+동작 흐름: 파일 열기 → `LoadThread` 가 FFmpeg 로 44.1kHz 스테레오 float32 로 디코딩해 캐시 폴더에 `.npy` 저장
+(원본이 48kHz 등이면 원본 샘플레이트 사본도 저장) → `SeparationThread` 가 (필요시 모델 다운로드 후) `engine.separate()` 실행 →
+결과 트랙을 `.npy` 로 저장(마지막 트랙 = 원본 − 나머지, 합이 원본과 정확히 같음)하고 메모리 매핑(memmap)으로 재생 →
+`KeyThread` 가 키 조절된 재생용 트랙 생성 → `ExportThread` 가 `export.Exporter` 로 원본 샘플레이트에서 MR(원본 − 뺀 트랙)·키 조절·
+클리핑 방지(모든 파일에 같은 이득)를 계산해 저장. 무거운 작업은 모두 별도 스레드라 UI 가 멈추지 않습니다.
 
 ## 2. 소스에서 실행하기
 
@@ -81,18 +86,22 @@ python run.py "노래.mp3"            # 파일을 열면서 시작
 | `HF_ENDPOINT` | HuggingFace 미러 주소 (사내 미러 등) |
 | `MUSIC_SEPARATOR_FFMPEG` | 다른 ffmpeg 실행 파일 사용 |
 | `MUSIC_SEPARATOR_FORCE_MODEL=demucs_unittest` | 초소형 테스트 모델로 UI 흐름 확인 (분리 품질 없음) |
+| `MUSIC_SEPARATOR_ROFORMER_URL` | BS-RoFormer SW 체크포인트를 받을 다른 주소 (사내 미러 등, SHA256 은 그대로 검사) |
 
 ## 3. 테스트
 
 ```bash
-pytest -q tests                                        # 19개 핵심 테스트
+pytest -q tests                                        # 33개 핵심 테스트
 python run.py --selftest --report selftest.json        # 실제 모델로 분리→저장 전 과정 점검 (모델 다운로드)
-python run.py --selftest --model demucs_unittest       # 모델 없이 빠른 점검
+python run.py --selftest --mode 6                      # Demucs 2단계 6-Stem
+python run.py --selftest --engine roformer --mode 6 --seconds 6   # 고급 엔진 (667MB 다운로드, CPU 는 수 분)
+python run.py --selftest --model demucs_unittest       # 모델 없이 빠른 점검 (roformer_unittest 도 가능)
 QT_QPA_PLATFORM=offscreen python run.py --gui-smoke shot.png   # GUI 자동 조작 + 스크린샷
 ```
 
-`--selftest` 는 FFmpeg 디코딩, 모델 로드, 분리, 각 형식 저장, 저장 파일 재검증,
-그리고 실제 모델일 때 *분리된 트랙의 합 ≈ 원본* 인지까지 확인합니다. 빌드된 실행 파일에도 같은 옵션이 들어 있습니다.
+`--selftest` 는 FFmpeg 디코딩, 모델 로드, 분리, 각 형식(WAV 24/32f · FLAC · MP3) 저장과 재검증,
+48kHz 원본 샘플레이트 저장이 원본과 비트 단위로 같은지, MP3 가 샘플 단위로 정렬되는지, 키 조절(440Hz +3 → 523Hz),
+그리고 실제 모델일 때 *모델 출력의 합 ≈ 원본* 인지까지 확인합니다. 빌드된 실행 파일에도 같은 옵션이 들어 있습니다.
 
 ## 4. GitHub Actions 로 Windows·macOS 자동 빌드 (권장)
 
@@ -102,14 +111,14 @@ GitHub 이 제공하는 Windows·macOS 가상 머신에서 빌드합니다.
 1. GitHub 에 새 저장소를 만들고 이 폴더 전체를 push 합니다.
    ```bash
    cd music-separator
-   git init && git add . && git commit -m "Music Separator 1.0.0"
+   git init && git add . && git commit -m "MR MAKER 1.0.0"
    git branch -M main
    git remote add origin https://github.com/<아이디>/music-separator.git
    git push -u origin main
    ```
 2. push 하면 **Actions** 탭에서 `Build` 워크플로가 자동 실행됩니다. 직접 실행하려면 *Actions → Build → Run workflow*.
 3. 완료되면 실행 결과 페이지 아래 **Artifacts** 에서 받습니다.
-   - `MusicSeparator-windows-x64-cpu` / `-cuda` / `macos-arm64` / `macos-x86_64` : 설치 파일
+   - `MRMaker-windows-x64-cpu` / `-cuda` / `macos-arm64` / `macos-x86_64` : 설치 파일
    - `test-…` : 각 OS 에서 **빌드된 실행 파일로 실제 실행한** 자가 진단 결과(JSON)와 GUI 스크린샷
 4. 정식 배포: 버전 태그를 push 하면 빌드 후 GitHub Release(초안)에 파일이 올라갑니다.
    ```bash
@@ -153,9 +162,9 @@ python scripts/build.py                                # 모델 미포함 (첫 �
 
 빌드 후 확인:
 ```bash
-dist/MusicSeparator/MusicSeparator --selftest                               # Linux
-"dist/Music Separator.app/Contents/MacOS/MusicSeparator" --selftest         # macOS
-dist\MusicSeparator\MusicSeparator.exe --selftest --report r.json           # Windows (창 모드 앱이라 결과는 JSON 으로)
+dist/MRMaker/MRMaker --selftest                                            # Linux
+"dist/MR MAKER for ui.clover.app/Contents/MacOS/MRMaker" --selftest        # macOS
+dist\MRMaker\MRMaker.exe --selftest --report r.json                         # Windows (창 모드 앱이라 결과는 JSON 으로)
 ```
 
 ## 6. macOS 코드 서명과 공증
@@ -190,7 +199,7 @@ export MS_CODESIGN_ID="Developer ID Application: Hong Gildong (ABCDE12345)"
 export APPLE_ID=you@example.com APPLE_TEAM_ID=ABCDE12345 APPLE_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx
 python scripts/build.py --bundle-models build/models
 # 확인
-spctl -a -vv "dist/Music Separator.app"         # → accepted, source=Notarized Developer ID
+spctl -a -vv "dist/MR MAKER for ui.clover.app"         # → accepted, source=Notarized Developer ID
 xcrun stapler validate dist/release/*.dmg
 ```
 
@@ -204,7 +213,7 @@ PyTorch·Python 확장 모듈 로드에 필요합니다. 공증이 거부되면 
 - **방법 A — Azure Artifact Signing** (구 Trusted Signing, Microsoft 의 클라우드 서명 서비스, 2026년 1월 정식 출시).
   인증서 파일을 직접 관리하지 않아 CI 에 가장 적합합니다. 자격 요건·요금은
   [제품 페이지](https://azure.microsoft.com/products/artifact-signing)를 확인하세요.
-  워크플로의 `Build` 단계 전에 Microsoft 가 제공하는 서명 액션을 추가해 `dist/MusicSeparator/MusicSeparator.exe` 와 설치 파일을 서명하면 됩니다.
+  워크플로의 `Build` 단계 전에 Microsoft 가 제공하는 서명 액션을 추가해 `dist/MRMaker/MRMaker.exe` 와 설치 파일을 서명하면 됩니다.
 - **방법 B — .pfx 인증서 파일**: Secrets 에 `WINDOWS_CERT_PFX_BASE64`, `WINDOWS_CERT_PASSWORD` 를 등록하면
   `scripts/build.py` 가 signtool 로 exe 와 설치 파일을 서명합니다.
   (최근 발급되는 코드 서명 인증서는 하드웨어 토큰/HSM 보관이 의무라 .pfx 로 내보낼 수 없는 경우가 많습니다.)
@@ -216,14 +225,16 @@ PyTorch·Python 확장 모듈 로드에 필요합니다. 공증이 거부되면 
 | 하고 싶은 것 | 수정할 곳 |
 |---|---|
 | 버전 올리기 | `src/music_separator/__init__.py` 의 `__version__` (설치 파일 이름·앱 정보에 자동 반영) → 태그 `vX.Y.Z` push |
-| 분리 모드/모델 바꾸기 | `engine.py` 의 `MODES` (모델, 출력 트랙), 새 모델은 `models.py` 의 `MODELS` 에 시그니처 추가 |
+| 분리 모드/모델 바꾸기 | `engine.py` 의 `MODES`·`ENGINES`·`plan_models()`, 새 모델은 `models.py` 의 `MODELS` 에 추가 (Demucs 는 시그니처, RoFormer 는 파일 이름·URL·SHA256) |
+| 프로그램 이름 | `src/music_separator/__init__.py` 의 `APP_NAME`·`APP_SHORT`·`APP_BRAND`·`EXE_NAME`, `installer.iss` 의 `AppName`. `APP_ID`·`DATA_DIR_NAME`·`BUNDLE_ID` 는 바꾸면 기존 설정·모델 폴더를 못 찾으니 그대로 두세요 |
+| 키 조절 범위·방식 | `pitch.py` (`KEY_MIN`/`KEY_MAX`, `shift()`), 저장 반영은 `export.py` |
 | 트랙 이름·색상 | `engine.py` 의 `STEM_STYLE` |
 | 화면 색·글꼴 | `ui/theme.py` (색 상수와 스타일시트), 글꼴 파일은 `assets/fonts/` (Pretendard) |
 | 아이콘 | `ui/icons.py` (SVG 경로를 코드에 포함) |
 | 화면 구성 요소 | `ui/widgets.py` (모드 타일, 칩, 토글, 트랙 카드, 파형, 줌) |
 | 화면 배치 | `ui/main_window.py` (`_build_header`, `_build_left_panel`, `_build_tracks_panel`, `_build_bottom_bar`) |
 | 저장 형식 추가 | `audio_io.py` 의 `EXPORT_FORMATS`, `write_audio()` |
-| 아이콘 | `assets/icon.png`(1024×1024) 교체 후 `python scripts/make_icons.py --from-png` |
+| 앱 아이콘 | 클로버 그림은 `ui/clover.py` → `python scripts/make_icons.py`. 이미지로 바꾸려면 `assets/icon.png`(1024×1024) 교체 후 `--from-png` |
 | 번들에 넣을 모델 | `.github/workflows/build.yml` 의 models 작업 (`fetch_models.py` 인자, 캐시 키) |
 | 설치 프로그램 설정 | `packaging/windows/installer.iss` (설치 경로, 바로가기, 권한) |
 | 포함/제외 모듈 | `packaging/music_separator.spec` 의 `hiddenimports` / `excludes` |
@@ -240,7 +251,9 @@ PyTorch·Python 확장 모듈 로드에 필요합니다. 공증이 거부되면 
 | PySide6-Essentials | 6.9.3 | macOS 12+ 지원 (6.10 은 13+, 6.12 는 14+). QtMultimedia 등 큰 모듈 제외로 용량 절감 |
 | Demucs | 4.1.0 (`--no-deps`) | 진행률 콜백·취소 지원. 사용하지 않는 `sphn`/`huggingface-hub` 의존성 제외 |
 | 재생 | sounddevice(PortAudio) | Windows/macOS 휠에 PortAudio 포함, 콜백 기반 저지연 멀티트랙 믹싱 |
-| FFmpeg | imageio-ffmpeg | OS 별 정적 ffmpeg 바이너리를 휠로 제공 → 번들 간단 |
+| FFmpeg | imageio-ffmpeg | OS 별 정적 ffmpeg 바이너리를 휠로 제공 → 번들 간단. MP3(libmp3lame, Xing 헤더로 샘플 정렬)·FLAC 인코딩에도 사용 |
+| 키 조절 | python-stretch 0.3.1 (Signalsmith Stretch) | MIT, 모든 대상 OS 휠 제공, 의존성 없음. 곡 전체를 한 번에 처리해 블록 경계 잡음 없음 |
+| 고급 엔진 | 자체 BS-RoFormer 구현 | 추가 패키지(rotary-embedding-torch 등) 없이 SW 체크포인트를 그대로 로드. 가중치는 번들하지 않고 첫 사용 시 내려받음 |
 
 최소 사양: Windows 10 1809+ / 11 (x64), macOS 12+, RAM 8GB 권장(4분 곡 기준 약 3GB 사용), 디스크 여유 2GB 이상.
 

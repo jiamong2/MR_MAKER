@@ -1,11 +1,11 @@
-; Music Separator - Windows 설치 프로그램 (Inno Setup 6)
-; 빌드: iscc /DAppVersion=1.0.0 /DSourceDir=..\..\dist\MusicSeparator /DVariant=cpu /DOutputDir=..\..\dist\release installer.iss
+; MR MAKER for ui.clover - Windows 설치 프로그램 (Inno Setup 6)
+; 빌드: iscc /DAppVersion=1.0.0 /DSourceDir=..\..\dist\MRMaker /DVariant=cpu /DOutputDir=..\..\dist\release installer.iss
 
 #ifndef AppVersion
   #define AppVersion "1.0.0"
 #endif
 #ifndef SourceDir
-  #define SourceDir "..\..\dist\MusicSeparator"
+  #define SourceDir "..\..\dist\MRMaker"
 #endif
 #ifndef OutputDir
   #define OutputDir "..\..\dist\release"
@@ -14,8 +14,8 @@
   #define Variant "cpu"
 #endif
 
-#define AppName "Music Separator"
-#define AppExe "MusicSeparator.exe"
+#define AppName "MR MAKER for ui.clover"
+#define AppExe "MRMaker.exe"
 #define KoreanIsl AddBackslash(CompilerPath) + "Languages\Korean.isl"
 
 [Setup]
@@ -23,7 +23,7 @@ AppId={{6B0E4C1A-3B7D-4F8E-9C2A-7D51E0A9F3B4}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
-AppPublisher={#AppName}
+AppPublisher=ui.clover
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
@@ -34,7 +34,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.17763
 OutputDir={#OutputDir}
-OutputBaseFilename=MusicSeparator-{#AppVersion}-windows-x64-{#Variant}-setup
+OutputBaseFilename=MRMaker-{#AppVersion}-windows-x64-{#Variant}-setup
 SetupIconFile=..\..\assets\icon.ico
 UninstallDisplayIcon={app}\{#AppExe}
 Compression=lzma2/ultra64
@@ -55,6 +55,12 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+
+[InstallDelete]
+; 이전 이름(Music Separator)으로 설치된 바로가기 정리 (같은 AppId 라 업그레이드로 설치됨)
+Type: files; Name: "{group}\Music Separator.lnk"
+Type: files; Name: "{autodesktop}\Music Separator.lnk"
+Type: files; Name: "{app}\MusicSeparator.exe"
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

@@ -12,7 +12,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import APP_ID, APP_NAME
+from . import APP_ID, APP_SHORT, DATA_DIR_NAME
 
 
 def is_frozen() -> bool:
@@ -42,7 +42,7 @@ def user_data_dir() -> Path:
     elif sys.platform == "win32":
         base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / APP_ID
     elif sys.platform == "darwin":
-        base = Path.home() / "Library" / "Application Support" / APP_NAME
+        base = Path.home() / "Library" / "Application Support" / DATA_DIR_NAME
     else:
         base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / APP_ID
     base.mkdir(parents=True, exist_ok=True)
@@ -68,7 +68,7 @@ def cache_root() -> Path:
     elif sys.platform == "win32":
         base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / APP_ID / "cache"
     elif sys.platform == "darwin":
-        base = Path.home() / "Library" / "Caches" / APP_NAME
+        base = Path.home() / "Library" / "Caches" / DATA_DIR_NAME
     else:
         base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / APP_ID
     base.mkdir(parents=True, exist_ok=True)
@@ -113,7 +113,7 @@ def default_output_dir() -> Path:
     music = Path.home() / "Music"
     if not music.exists():
         music = Path.home()
-    return music / APP_NAME
+    return music / APP_SHORT
 
 
 def open_in_file_manager(path: Path) -> None:

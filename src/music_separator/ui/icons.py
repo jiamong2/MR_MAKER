@@ -55,8 +55,8 @@ _ICONS: dict[str, str] = {
     "cpu": '<rect x="6" y="6" width="12" height="12" rx="2" {S}/><rect x="9.5" y="9.5" width="5" height="5" rx="1" {S}/>'
            '<path d="M9.5 2.5V6M14.5 2.5V6M9.5 18v3.5M14.5 18v3.5M2.5 9.5H6M2.5 14.5H6M18 9.5h3.5M18 14.5h3.5" {S}/>',
     "music": '<path d="M9 18V5.5l11-2v12.5" {S}/><circle cx="6.5" cy="18" r="2.5" {S}/><circle cx="17.5" cy="16" r="2.5" {S}/>',
-    "check-circle": '<circle cx="12" cy="12" r="9.5" fill="{c}" stroke="none"/><path d="M7.8 12.3l2.8 2.8 5.6-5.8" fill="none" stroke="#0d1220" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>',
-    "alert": '<circle cx="12" cy="12" r="9.5" fill="{c}" stroke="none"/><path d="M12 7.2v5.6M12 16.4v.2" fill="none" stroke="#0d1220" stroke-width="2.6" stroke-linecap="round"/>',
+    "check-circle": '<circle cx="12" cy="12" r="9.5" fill="{c}" stroke="none"/><path d="M7.8 12.3l2.8 2.8 5.6-5.8" fill="none" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>',
+    "alert": '<circle cx="12" cy="12" r="9.5" fill="{c}" stroke="none"/><path d="M12 7.2v5.6M12 16.4v.2" fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round"/>',
     "x": '<path d="M6 6l12 12M18 6L6 18" {S}/>',
     "chevron-down": '<path d="M6.5 9.5l5.5 5.5 5.5-5.5" {S}/>',
     "upload": '<path d="M12 15.5V4M7.5 8.5L12 4l4.5 4.5" {S}/><path d="M4 15.5v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" {S}/>',

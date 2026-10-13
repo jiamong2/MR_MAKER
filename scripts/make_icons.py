@@ -11,72 +11,21 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPointF, QRectF, Qt  # noqa: E402
-from PySide6.QtGui import QColor, QGuiApplication, QImage, QLinearGradient, QPainter, QPainterPath, QPen  # noqa: E402
+from PySide6.QtCore import QPointF, Qt  # noqa: E402
+from PySide6.QtGui import QColor, QGuiApplication, QImage, QPainter, QPainterPath, QPen  # noqa: E402
 
 ASSETS = Path(__file__).resolve().parents[1] / "assets"
-COLORS = ["#F5A623", "#3FB8F0", "#B57BFF", "#5BD08A", "#FF7EB6"]
 
 
 def draw_icon(size: int = 1024) -> QImage:
+    """앱 아이콘: 흰색 둥근 사각형 + 네잎클로버 (ui/clover.py 의 벡터 그림)."""
+    sys.path.insert(0, str(ASSETS.parent / "src"))
+    from music_separator.ui.clover import paint_app_icon
+
     img = QImage(size, size, QImage.Format.Format_ARGB32)
     img.fill(Qt.GlobalColor.transparent)
     p = QPainter(img)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    s = size
-    # macOS 스타일 여백 + 둥근 사각형
-    m = s * 0.09
-    rect = QRectF(m, m, s - 2 * m, s - 2 * m)
-    g = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-    g.setColorAt(0, QColor("#34343c"))
-    g.setColorAt(1, QColor("#16161a"))
-    path = QPainterPath()
-    path.addRoundedRect(rect, s * 0.19, s * 0.19)
-    p.fillPath(path, g)
-    p.setPen(QPen(QColor(255, 255, 255, 30), s * 0.006))
-    p.drawPath(path)
-
-    # 왼쪽: 하나의 흰 파형 → 오른쪽: 색색의 트랙으로 갈라짐
-    cy = s * 0.5
-    left_x = s * 0.20
-    split_x = s * 0.44
-    right_x = s * 0.80
-    import math
-
-    wave = QPainterPath()
-    n = 60
-    for i in range(n + 1):
-        x = left_x + (split_x - left_x) * i / n
-        amp = s * 0.13 * math.sin(math.pi * i / n) * (0.6 + 0.4 * math.sin(i * 0.9))
-        y = cy - amp
-        (wave.moveTo if i == 0 else wave.lineTo)(QPointF(x, y))
-    for i in range(n, -1, -1):
-        x = left_x + (split_x - left_x) * i / n
-        amp = s * 0.13 * math.sin(math.pi * i / n) * (0.6 + 0.4 * math.sin(i * 0.9))
-        wave.lineTo(QPointF(x, cy + amp))
-    p.fillPath(wave, QColor("#e9e9ee"))
-
-    lanes = len(COLORS)
-    gap = s * 0.115
-    for k, col in enumerate(COLORS):
-        y = cy + (k - (lanes - 1) / 2) * gap
-        pen = QPen(QColor(col), s * 0.05)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        p.setPen(pen)
-        curve = QPainterPath(QPointF(split_x - s * 0.02, cy))
-        curve.cubicTo(QPointF(split_x + s * 0.10, cy), QPointF(split_x + s * 0.06, y),
-                      QPointF(split_x + s * 0.17, y))
-        p.drawPath(curve)
-        # 각 트랙의 미니 파형 막대
-        x0 = split_x + s * 0.235
-        bars = 6
-        bpen = QPen(QColor(col), s * 0.022)
-        bpen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        p.setPen(bpen)
-        for b in range(bars):
-            x = x0 + b * (right_x - x0) / (bars - 1)
-            h = s * (0.008 + 0.030 * ((b * 7 + k * 3) % 5) / 4)
-            p.drawLine(QPointF(x, y - h), QPointF(x, y + h))
+    paint_app_icon(p, size)
     p.end()
     return img
 
@@ -108,7 +57,7 @@ def main():
     sys.path.insert(0, str(ASSETS.parent / "src"))
     from music_separator.ui.icons import pixmap  # noqa: E402
 
-    pixmap("chevron-down", "#8f99b2", 28, 1.0, 2.2).save(str(ASSETS / "chevron.png"))
+    pixmap("chevron-down", "#8a93a5", 28, 1.0, 2.2).save(str(ASSETS / "chevron.png"))
     from PIL import Image
 
     im = Image.open(png).convert("RGBA")

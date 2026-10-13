@@ -42,9 +42,9 @@ def make_test_signal(seconds: float = 12.0, sr: int = 44100) -> np.ndarray:
 
 
 def run(model: Optional[str] = None, allow_download: bool = True, report: Optional[str] = None,
-        device_pref: str = "auto", mode: str = "4") -> int:
-    from . import __version__, audio_io, engine, models, system
-    from .dsp import mixdown
+        device_pref: str = "auto", mode: str = "4", engine_key: str = "demucs", seconds: float = 12.0) -> int:
+    from . import __version__, audio_io, engine, models, pitch, system
+    from .export import Exporter, ExportJob, ExportOptions, ExportSource
 
     rep: dict = {"version": __version__, "platform": platform.platform(), "machine": platform.machine(),
                  "python": platform.python_version(), "checks": {}, "ok": False}
@@ -78,7 +78,7 @@ def run(model: Optional[str] = None, allow_download: bool = True, report: Option
         check("versions", versions)
         check("ffmpeg", lambda: audio_io.find_ffmpeg())
 
-        sig = make_test_signal()
+        sig = make_test_signal(seconds)
         wav_in = work / "input.wav"
         mp3_in = work / "input.mp3"
 
@@ -90,46 +90,54 @@ def run(model: Optional[str] = None, allow_download: bool = True, report: Option
             assert abs(len(a) - len(sig)) == 0, f"wav length {len(a)} != {len(sig)}"
             assert abs(len(b) - len(sig)) < 44100 * 0.2, f"mp3 length {len(b)}"
             dur = audio_io.probe_duration(mp3_in)
-            assert dur and abs(dur - 12.0) < 0.3, f"probe {dur}"
+            assert dur and abs(dur - seconds) < 0.3, f"probe {dur}"
             return {"wav_samples": len(a), "mp3_samples": len(b), "probe_sec": dur}
         check("audio_io", io_roundtrip)
 
         check("devices", lambda: [f"{d.key}: {d.label}" for d in system.detect_devices()])
         dev = system.choose_device(device_pref).key
-        name = model or engine.model_for(mode, False)
+        if model and model.startswith("roformer"):
+            engine_key = "roformer"
+        names = engine.required_models(engine_key, mode, False, model)
+        rep["engine"], rep["models"] = engine_key, names
+        real = not any(n.endswith(("_unittest", "_unittest6")) for n in names)
 
-        if name != "demucs_unittest":
+        if real:
             def ensure():
-                if models.is_installed(name):
-                    return f"installed at {models.find_model_dir(name)}"
-                if not allow_download:
-                    raise RuntimeError("model not installed and download disabled")
-                last = [0.0]
+                out = {}
+                for name in names:
+                    if models.is_installed(name):
+                        out[name] = f"installed at {models.find_model_dir(name)}"
+                        continue
+                    if not allow_download:
+                        raise RuntimeError(f"model {name} not installed and download disabled")
+                    last = [0.0]
 
-                def prog(done, total, label):
-                    if time.monotonic() - last[0] > 2:
-                        last[0] = time.monotonic()
-                        _say(f"       {label} {done / 1048576:.0f}/{total / 1048576:.0f}MB")
-                folder = models.download_model(name, prog)
-                return f"downloaded to {folder}"
+                    def prog(done, total, label):
+                        if time.monotonic() - last[0] > 2:
+                            last[0] = time.monotonic()
+                            _say(f"       {label} {done / 1048576:.0f}/{total / 1048576:.0f}MB")
+                    out[name] = f"downloaded to {models.download_model(name, prog)}"
+                return out
             check("model", ensure)
 
         mix = audio_io.decode_audio(wav_in)
 
         def separate():
-            res = engine.separate(mix, mode, work / "stems", device=dev, model_name=name)
+            res = engine.separate(mix, mode, work / "stems", engine=engine_key, device=dev, model_name=model)
             stems = {s.key: np.load(s.path) for s in res.stems}
             for k, a in stems.items():
                 assert a.shape == mix.shape, f"{k} shape {a.shape}"
                 assert np.isfinite(a).all(), f"{k} has NaN"
-            out = {"model": name, "device": res.device, "elapsed": round(res.elapsed, 2),
-                   "stems": list(stems), "rms": {k: round(float(np.sqrt((a ** 2).mean())), 4)
-                                                 for k, a in stems.items()}}
-            if name != "demucs_unittest":
-                recon = sum(stems.values())
-                err = float(np.linalg.norm(recon - mix) / (np.linalg.norm(mix) + 1e-9))
-                out["reconstruction_error"] = round(err, 4)
-                assert err < 0.35, f"stems do not sum to the mix (rel. error {err:.2f})"
+            total = sum(stems.values())
+            sum_err = float(np.max(np.abs(total - mix)))
+            assert sum_err < 1e-4, f"stems must sum to the mix exactly (max err {sum_err})"
+            out = {"models": names, "engine": engine_key, "device": res.device, "elapsed": round(res.elapsed, 2),
+                   "stems": list(stems), "raw_reconstruction_error": round(res.raw_recon_error, 4),
+                   "rms": {k: round(float(np.sqrt((a ** 2).mean())), 4) for k, a in stems.items()}}
+            if real:
+                # 실제 모델이면 모델 출력의 합이 원본과 거의 같아야 함 (가중치가 제대로 로드됐는지 확인)
+                assert res.raw_recon_error < 0.35, f"model outputs do not sum to the mix ({res.raw_recon_error:.2f})"
             holder["res"] = res
             return out
         holder: dict = {}
@@ -137,23 +145,48 @@ def run(model: Optional[str] = None, allow_download: bool = True, report: Option
         res = holder["res"]
 
         def export():
-            written = []
-            stems = {s.key: np.load(s.path, mmap_mode="r") for s in res.stems}
-            for k, a in stems.items():
-                for fmt in ("wav16", "wav24", "mp3"):
-                    p = work / "export" / f"{k}{audio_io.EXPORT_FORMATS[fmt][1]}".replace(".", f"_{fmt}.", 1)
-                    p.parent.mkdir(parents=True, exist_ok=True)
-                    audio_io.write_audio(p, a, fmt)
-                    written.append(p)
-            mr = mixdown([a for k, a in stems.items() if k != "vocals"], [1.0] * (len(stems) - 1))
-            p = work / "export" / "MR.wav"
-            audio_io.write_wav(p, mr, 16)
-            written.append(p)
-            for p in written:
-                d = audio_io.decode_audio(p)
-                assert abs(len(d) - len(mix)) < 44100 * 0.2, f"{p.name}: {len(d)}"
-            return {"files": len(written)}
+            # 48kHz 원본을 가정한 사본 → 원본 샘플레이트 저장 경로까지 확인
+            native48 = audio_io.resample(mix, 44100, 48000)
+            np.save(work / "mix44.npy", mix)
+            np.save(work / "native48.npy", native48)
+            src = ExportSource({st.key: st.path for st in res.stems}, res.stems[-1].key, work / "mix44.npy",
+                               work / "native48.npy", 48000)
+            out_dir = work / "export"
+            jobs = [ExportJob(out_dir / f"{st.key}_{fmt}{audio_io.EXPORT_FORMATS[fmt][1]}", fmt, st.key, "stem",
+                              key=st.key) for st in res.stems for fmt in ("wav24", "wav32f", "flac", "mp3")]
+            excluded = [res.stems[0].key]
+            jobs.append(ExportJob(out_dir / "MR.wav", "wav32f", "MR", "mr", excluded=excluded,
+                                  gains={st.key: 1.0 for st in res.stems if st.key not in excluded}))
+            jobs.append(ExportJob(out_dir / "FULL.wav", "wav32f", "FULL", "mr", excluded=[], gains={}))
+            rep_ = Exporter(src, ExportOptions(), work).run(jobs)
+            for j in jobs:
+                d = audio_io.decode_audio(j.path, sample_rate=48000)
+                assert abs(len(d) - len(native48)) < 48000 * 0.05, f"{j.path.name}: {len(d)}"
+            full = audio_io.decode_audio(out_dir / "FULL.wav", sample_rate=48000)
+            full_err = float(np.max(np.abs(full - native48)))
+            assert full_err < 1e-6, f"full mix should equal the original exactly ({full_err})"
+            mp3 = audio_io.decode_audio(out_dir / f"{res.stems[1].key}_mp3.mp3", sample_rate=48000)
+            ref = audio_io.decode_audio(out_dir / f"{res.stems[1].key}_wav32f.wav", sample_rate=48000)
+            n = min(len(mp3), len(ref), 48000 * 3)
+            c = np.correlate(mp3[:n, 0], ref[:n, 0], "full")
+            lag = int(np.argmax(np.abs(c)) - (n - 1)) if np.abs(ref[:n, 0]).max() > 1e-4 else 0
+            assert abs(lag) < 5, f"mp3 is not sample-aligned (lag {lag})"
+            return {"files": len(jobs), "rate": rep_.sample_rate, "full_mix_max_err": full_err, "mp3_lag": lag}
         check("export", export)
+
+        def key_shift():
+            if not pitch.available():
+                raise RuntimeError("python-stretch 를 불러올 수 없습니다")
+            sr = 44100
+            t = np.arange(sr * 2) / sr
+            tone = np.stack([0.4 * np.sin(2 * np.pi * 440 * t)] * 2, 1).astype(np.float32)
+            y = pitch.shift(tone, 3, sr)
+            seg = y[sr // 2: sr + sr // 2, 0]
+            f = np.fft.rfftfreq(len(seg), 1 / sr)[np.argmax(np.abs(np.fft.rfft(seg * np.hanning(len(seg)))))]
+            assert abs(f - 440 * 2 ** (3 / 12)) < 3, f"pitch shift wrong: {f:.1f}Hz"
+            assert len(y) == len(tone)
+            return {"440Hz +3 ->": round(float(f), 1)}
+        check("key_shift", key_shift)
 
         def audio_device():
             import sounddevice as sd

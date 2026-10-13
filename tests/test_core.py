@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import functools
 import http.server
-import os
 import shutil
 import sys
 import threading
@@ -106,15 +105,38 @@ def test_audio_roundtrip_formats(tmp_path):
     from music_separator import audio_io
 
     x = signal(3.0)
-    for fmt in ("wav16", "wav24", "mp3"):
+    for fmt in ("wav16", "wav24", "wav32f", "flac", "mp3"):
         p = tmp_path / f"t_{fmt}{audio_io.EXPORT_FORMATS[fmt][1]}"
         audio_io.write_audio(p, x, fmt)
         y = audio_io.decode_audio(p)
-        assert abs(len(y) - len(x)) < 44100 * 0.2
-        if fmt.startswith("wav"):
-            tol = 1e-4 if fmt == "wav16" else 1e-6
-            assert np.abs(y - np.clip(x, -1, 1)).max() < tol
+        assert len(y) == len(x), fmt          # MP3 도 인코더 지연 없이 같은 길이
+        if fmt != "mp3":
+            tol = {"wav16": 1e-4, "wav24": 1e-6, "flac": 1e-6, "wav32f": 1e-7}[fmt]
+            ref = x if fmt == "wav32f" else np.clip(x, -1, 1)
+            assert np.abs(y - ref).max() < tol, fmt
     assert abs(audio_io.probe_duration(tmp_path / "t_wav16.wav") - 3.0) < 0.05
+
+
+def test_float_wav_keeps_overs_and_rates(tmp_path):
+    from music_separator import audio_io
+
+    x = signal(1.0) * 3.0                       # 0dBFS 를 크게 넘는 신호
+    p = tmp_path / "f.wav"
+    audio_io.write_wav_float(p, x, 48000)
+    assert audio_io.probe_sample_rate(p) == 48000
+    y = audio_io.decode_audio(p, sample_rate=48000)
+    assert np.abs(y - x).max() < 1e-6 and np.abs(y).max() > 1.5
+
+
+def test_resample_roundtrip():
+    from music_separator import audio_io
+
+    t = np.arange(44100 * 2) / 44100
+    x = np.stack([np.sin(2 * np.pi * 1000 * t)] * 2, 1).astype(np.float32) * 0.5
+    y = audio_io.resample(audio_io.resample(x, 44100, 48000), 48000, 44100)
+    assert len(y) == len(x)
+    mid = slice(2000, -2000)
+    assert np.abs(y[mid] - x[mid]).max() < 1e-3
 
 
 def test_decode_errors(tmp_path):
@@ -152,16 +174,21 @@ def test_safe_filename():
 
 # --------------------------------------------------------------- engine ---
 
-@pytest.mark.parametrize("mode", ["2", "4"])
-def test_separate_unittest_model(tmp_path, mode):
+@pytest.mark.parametrize("eng,mode", [("demucs", "2"), ("demucs", "4"), ("demucs", "6"),
+                                      ("roformer", "2"), ("roformer", "4"), ("roformer", "6")])
+def test_separate_unittest_model(tmp_path, eng, mode):
     from music_separator import engine
 
-    x = signal(8.0)
-    res = engine.separate(x, mode, tmp_path / "out", model_name="demucs_unittest")
+    x = signal(6.0)
+    override = "roformer_unittest" if eng == "roformer" else "demucs_unittest"
+    res = engine.separate(x, mode, tmp_path / "out", engine=eng, model_name=override)
     assert [s.key for s in res.stems] == list(engine.MODES[mode].outputs)
+    total = 0
     for s in res.stems:
         a = np.load(s.path)
         assert a.shape == x.shape and np.isfinite(a).all()
+        total = total + a
+    assert np.abs(total - x).max() < 1e-5     # 모든 트랙의 합 = 원본 (소리가 사라지지 않음)
 
 
 def test_two_stem_instrumental_is_sum_of_others(tmp_path):
@@ -177,6 +204,7 @@ def test_two_stem_instrumental_is_sum_of_others(tmp_path):
     s4 = {s.key: np.load(s.path) for s in r4.stems}
     s2 = {s.key: np.load(s.path) for s in r2.stems}
     assert np.allclose(s2["vocals"], s4["vocals"], atol=1e-5)
+    assert np.allclose(s2["instrumental"], x - s2["vocals"], atol=1e-6)        # 반주 = 원본 − 보컬
     assert np.allclose(s2["instrumental"], s4["drums"] + s4["bass"] + s4["other"], atol=1e-4)
 
 
@@ -309,3 +337,148 @@ def test_requirements_estimate(tmp_path):
     req = system.separation_requirement(44100 * 240, 4, 4, tmp_path)
     assert req.disk_needed > 4 * 44100 * 240 * 8
     assert req.ram_needed > 1.5 * system.GB
+
+
+# ---------------------------------------------------------------- roformer ---
+
+def test_roformer_architecture_shapes():
+    """구조가 BS-RoFormer SW 체크포인트와 같은 파라미터 이름/모양을 갖는지 (실제 가중치 없이)."""
+    import torch
+
+    from music_separator.roformer import SW_CONFIG, BSRoformer
+
+    m = BSRoformer(**SW_CONFIG)
+    sd = m.state_dict()
+    assert len(sd) == 1939
+    assert tuple(sd["layers.0.0.layers.0.0.to_qkv.weight"].shape) == (1536, 256)
+    assert tuple(sd["mask_estimators.5.to_freqs.0.0.2.weight"].shape) == (16, 1024)
+    assert abs(sum(v.numel() for v in sd.values()) / 1e6 - 174.66) < 0.1
+    with torch.no_grad():
+        small = BSRoformer(**dict(SW_CONFIG, dim=16, depth=1, dim_head=8, heads=2)).eval()
+        y = small(torch.randn(1, 2, 44100))
+    assert y.shape == (1, 6, 2, 44100)
+
+
+def test_roformer_demix_overlap_add():
+    """겹침 처리 경계에서 이어 붙이기가 맞는지: 항등 모델이면 출력 = 입력."""
+    import torch
+
+    from music_separator import roformer
+
+    class Identity(torch.nn.Module):
+        num_stems = 1
+
+        def forward(self, x):
+            return x[:, None]
+
+    x = signal(9.0)
+    out = roformer.demix(Identity(), x, "cpu", num_overlap=2, chunk=44100 * 2)
+    assert out.shape == (1,) + x.shape
+    assert np.abs(out[0] - x).max() < 1e-5
+
+
+# ------------------------------------------------------------------ export ---
+
+def _export_fixture(tmp_path, native_rate=48000, gain=1.0):
+    from music_separator import audio_io
+    from music_separator.export import ExportSource
+
+    sr = native_rate
+    t = np.arange(sr * 4) / sr
+    comp = {"vocals": 0.3 * np.sin(2 * np.pi * 440 * t), "drums": 0.3 * np.sin(2 * np.pi * 3 * t) ** 9,
+            "bass": 0.3 * np.sin(2 * np.pi * 60 * t)}
+    comp = {k: (np.stack([v, v * 0.9], 1) * gain).astype(np.float32) for k, v in comp.items()}
+    native = sum(comp.values())
+    np.save(tmp_path / "native.npy", native)
+    mix44 = audio_io.resample(native, sr, 44100)
+    np.save(tmp_path / "mix44.npy", mix44)
+    v = audio_io.resample(comp["vocals"], sr, 44100)
+    d = audio_io.resample(comp["drums"], sr, 44100)
+    np.save(tmp_path / "vocals.npy", v)
+    np.save(tmp_path / "drums.npy", d)
+    np.save(tmp_path / "other.npy", mix44 - v - d)
+    stems = {k: tmp_path / f"{k}.npy" for k in ("vocals", "drums", "other")}
+    return ExportSource(stems, "other", tmp_path / "mix44.npy", tmp_path / "native.npy", sr), comp, native
+
+
+def test_export_full_mix_is_lossless_at_native_rate(tmp_path):
+    from music_separator import audio_io
+    from music_separator.export import Exporter, ExportJob, ExportOptions
+
+    src, comp, native = _export_fixture(tmp_path)
+    rep = Exporter(src, ExportOptions(), tmp_path).run(
+        [ExportJob(tmp_path / "full.wav", "wav32f", "full", "mr", excluded=[], gains={})])
+    assert rep.sample_rate == 48000
+    y = audio_io.decode_audio(tmp_path / "full.wav", sample_rate=48000)
+    assert np.abs(y - native).max() == 0.0
+
+
+def test_export_mr_is_original_minus_removed(tmp_path):
+    from music_separator import audio_io
+    from music_separator.export import Exporter, ExportJob, ExportOptions
+
+    src, comp, native = _export_fixture(tmp_path)
+    Exporter(src, ExportOptions(), tmp_path).run(
+        [ExportJob(tmp_path / "mr.wav", "wav32f", "mr", "mr", excluded=["vocals"], gains={})])
+    y = audio_io.decode_audio(tmp_path / "mr.wav", sample_rate=48000)
+    truth = comp["drums"] + comp["bass"]
+    snr = 10 * np.log10((truth ** 2).sum() / ((y - truth) ** 2).sum())
+    assert snr > 60, snr
+
+
+def test_export_volume_gains_and_clipping_guard(tmp_path):
+    from music_separator import audio_io
+    from music_separator.export import Exporter, ExportJob, ExportOptions
+
+    src, comp, native = _export_fixture(tmp_path, gain=3.0)     # 0dBFS 초과
+    rep = Exporter(src, ExportOptions(keep_native_rate=False), tmp_path).run(
+        [ExportJob(tmp_path / "a.wav", "wav24", "a", "mr", excluded=[], gains={"drums": 0.5})])
+    assert rep.sample_rate == 44100 and rep.gain_db < 0
+    y = audio_io.decode_audio(tmp_path / "a.wav")
+    assert np.abs(y).max() <= 1.0
+    rep = Exporter(src, ExportOptions(keep_native_rate=False), tmp_path).run(
+        [ExportJob(tmp_path / "b.wav", "wav32f", "b", "mr", excluded=[], gains={"drums": 0.5})])
+    assert rep.gain_db == 0.0
+
+
+def test_export_key_shift_keeps_drums(tmp_path):
+    from music_separator import audio_io
+    from music_separator.export import Exporter, ExportJob, ExportOptions
+
+    src, comp, native = _export_fixture(tmp_path)
+    Exporter(src, ExportOptions(semitones=12, keep_drums_pitch=True), tmp_path).run([
+        ExportJob(tmp_path / "d.wav", "wav32f", "d", "stem", key="drums"),
+        ExportJob(tmp_path / "v.wav", "wav32f", "v", "stem", key="vocals")])
+    d = audio_io.decode_audio(tmp_path / "d.wav", sample_rate=48000)
+    truth = comp["drums"]
+    assert 10 * np.log10((truth ** 2).sum() / ((d - truth) ** 2).sum()) > 40   # 드럼은 그대로
+    v = audio_io.decode_audio(tmp_path / "v.wav", sample_rate=48000)[48000:96000, 0]
+    f = np.fft.rfftfreq(len(v), 1 / 48000)[np.argmax(np.abs(np.fft.rfft(v * np.hanning(len(v)))))]
+    assert abs(f - 880) < 3                                                  # 보컬은 한 옥타브 위
+
+
+def test_pitch_shift_accuracy():
+    from music_separator import pitch
+
+    sr = 44100
+    t = np.arange(sr * 2) / sr
+    x = np.stack([0.4 * np.sin(2 * np.pi * 440 * t)] * 2, 1).astype(np.float32)
+    assert pitch.shift(x, 0) is not None and np.array_equal(pitch.shift(x, 0), x)
+    for semis in (-12, -5, 7):
+        y = pitch.shift(x, semis, sr)
+        assert len(y) == len(x)
+        seg = y[sr // 2: sr + sr // 2, 0]
+        f = np.fft.rfftfreq(len(seg), 1 / sr)[np.argmax(np.abs(np.fft.rfft(seg * np.hanning(len(seg)))))]
+        assert abs(f - 440 * 2 ** (semis / 12)) < 3, (semis, f)
+
+
+def test_model_import_raw_checkpoint(tmp_path, monkeypatch):
+    """BS-Roformer-SW.ckpt 파일만 있는 폴더도 '모델 가져오기'로 설치되어야 함."""
+    from music_separator import models
+
+    spec = models.MODELS["bs_roformer_sw"]
+    src = tmp_path / "dl"
+    src.mkdir()
+    (src / spec.file_name).write_bytes(b"0" * (spec.approx_mb * 1024 * 1024))
+    assert models.copy_into_user_dir(src) == ["bs_roformer_sw"]
+    assert models.is_installed("bs_roformer_sw")

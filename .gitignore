@@ -13,3 +13,4 @@ selftest*.json
 models/
 .DS_Store
 Thumbs.db
+.msdata/
