@@ -5,7 +5,7 @@ from typing import Iterable, Optional, Sequence
 
 import numpy as np
 
-PEAK_BUCKETS = 3000
+PEAK_BUCKETS = 16000
 
 
 def compute_peaks(data: np.ndarray, buckets: int = PEAK_BUCKETS, block: int = 1 << 20) -> np.ndarray:

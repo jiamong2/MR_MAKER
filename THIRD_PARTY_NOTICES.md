@@ -12,6 +12,7 @@ Music Separator 배포 파일에는 다음 오픈소스가 포함됩니다. 배�
 | [LAME](https://lame.sourceforge.io) / [lameenc](https://github.com/chrisstaite/lameenc) | MP3 인코딩 | LGPL |
 | [PortAudio](http://www.portaudio.com) / [sounddevice](https://github.com/spatialaudio/python-sounddevice) | 오디오 재생 | MIT |
 | NumPy, PyYAML, einops, julius, safetensors, tqdm, psutil, certifi, truststore | 보조 라이브러리 | BSD / MIT / Apache-2.0 / MPL-2.0 |
+| [Pretendard](https://github.com/orioncactus/pretendard) | 화면 글꼴 (assets/fonts) | SIL Open Font License 1.1 (assets/fonts/OFL-Pretendard.txt) |
 | [PyInstaller](https://pyinstaller.org) | 실행 파일 생성 (부트로더) | GPLv2 + 예외 조항 (생성된 실행 파일은 자유롭게 배포 가능) |
 | [Inno Setup](https://jrsoftware.org/isinfo.php) | Windows 설치 프로그램 | Inno Setup License |
 

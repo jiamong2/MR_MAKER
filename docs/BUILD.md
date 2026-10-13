@@ -218,8 +218,10 @@ PyTorch·Python 확장 모듈 로드에 필요합니다. 공증이 거부되면 
 | 버전 올리기 | `src/music_separator/__init__.py` 의 `__version__` (설치 파일 이름·앱 정보에 자동 반영) → 태그 `vX.Y.Z` push |
 | 분리 모드/모델 바꾸기 | `engine.py` 의 `MODES` (모델, 출력 트랙), 새 모델은 `models.py` 의 `MODELS` 에 시그니처 추가 |
 | 트랙 이름·색상 | `engine.py` 의 `STEM_STYLE` |
-| 화면 색·글꼴 | `ui/theme.py` (색 상수와 스타일시트) |
-| 화면 배치 | `ui/main_window.py` (`_build_control_bar`, `_build_inspector`, `_build_main_area`, `_build_export_bar`) |
+| 화면 색·글꼴 | `ui/theme.py` (색 상수와 스타일시트), 글꼴 파일은 `assets/fonts/` (Pretendard) |
+| 아이콘 | `ui/icons.py` (SVG 경로를 코드에 포함) |
+| 화면 구성 요소 | `ui/widgets.py` (모드 타일, 칩, 토글, 트랙 카드, 파형, 줌) |
+| 화면 배치 | `ui/main_window.py` (`_build_header`, `_build_left_panel`, `_build_tracks_panel`, `_build_bottom_bar`) |
 | 저장 형식 추가 | `audio_io.py` 의 `EXPORT_FORMATS`, `write_audio()` |
 | 아이콘 | `assets/icon.png`(1024×1024) 교체 후 `python scripts/make_icons.py --from-png` |
 | 번들에 넣을 모델 | `.github/workflows/build.yml` 의 models 작업 (`fetch_models.py` 인자, 캐시 키) |

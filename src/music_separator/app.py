@@ -65,7 +65,7 @@ def main(argv=None) -> int:
                    device_pref=args.device, mode=args.mode)
 
     from PySide6.QtCore import QCoreApplication, QEvent, QSettings, QTimer
-    from PySide6.QtGui import QFont, QIcon
+    from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
 
     QCoreApplication.setOrganizationName(ORG_NAME)
@@ -96,11 +96,8 @@ def main(argv=None) -> int:
     from .ui import theme
     from .ui.main_window import MainWindow
 
-    theme.apply_palette(app)
-    f = QFont(app.font())
-    if sys.platform != "darwin":
-        f.setPointSizeF(max(f.pointSizeF(), 9.5))
-    app.setFont(f)
+    theme.apply(app)
+    theme.finalize_stylesheet(app)
 
     paths.cleanup_stale_sessions()
     win = MainWindow(QSettings())

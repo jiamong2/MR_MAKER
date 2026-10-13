@@ -105,6 +105,10 @@ def main():
     if "--from-png" not in sys.argv:
         draw_icon(1024).save(str(png))
     draw_check(30).save(str(ASSETS / "check.png"))
+    sys.path.insert(0, str(ASSETS.parent / "src"))
+    from music_separator.ui.icons import pixmap  # noqa: E402
+
+    pixmap("chevron-down", "#8f99b2", 28, 1.0, 2.2).save(str(ASSETS / "chevron.png"))
     from PIL import Image
 
     im = Image.open(png).convert("RGBA")
