@@ -137,11 +137,21 @@ def run(model: Optional[str] = None, allow_download: bool = True, report: Option
             sum_err = float(np.max(np.abs(total - mix)))
             assert sum_err < 1e-4, f"stems must sum to the mix exactly (max err {sum_err})"
             out = {"models": names, "engine": engine_key, "device": res.device, "elapsed": round(res.elapsed, 2),
-                   "stems": list(stems), "raw_reconstruction_error": round(res.raw_recon_error, 4),
+                   "stems": list(stems),
+                   "raw_reconstruction_error": round(res.raw_recon_error, 4) if np.isfinite(res.raw_recon_error)
+                   else None,
                    "rms": {k: round(float(np.sqrt((a ** 2).mean())), 4) for k, a in stems.items()}}
-            if real:
+            if real and np.isfinite(res.raw_recon_error):
                 # 실제 모델이면 모델 출력의 합이 원본과 거의 같아야 함 (가중치가 제대로 로드됐는지 확인)
                 assert res.raw_recon_error < 0.35, f"model outputs do not sum to the mix ({res.raw_recon_error:.2f})"
+            elif real:
+                # 보컬 전용 모델: 보컬 추정이 비어 있지도, 원본을 그대로 통과시키지도 않아야 함
+                v = stems["vocals"]
+                ratio = float(np.sqrt((v ** 2).mean()) / (np.sqrt((mix ** 2).mean()) + 1e-9))
+                corr = float(np.dot(v.reshape(-1), mix.reshape(-1)) /
+                             (np.linalg.norm(v) * np.linalg.norm(mix) + 1e-9))
+                out["vocal_rms_ratio"], out["vocal_mix_corr"] = round(ratio, 4), round(corr, 4)
+                assert 0.003 < ratio < 0.95 and corr > 0.05, f"vocal model output looks wrong (rms {ratio:.3f}, corr {corr:.2f})"
             holder["res"] = res
             return out
         holder: dict = {}

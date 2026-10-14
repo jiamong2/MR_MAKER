@@ -97,6 +97,9 @@ PRESETS: dict[str, Preset] = {
 }
 DEFAULT_PRESET = "quality"
 
+# 한 가지 소스(보컬)만 학습된 하위 모델 — 나머지 출력은 쓰지 않음
+SINGLE_TARGET_MODELS = {"htdemucs_ft_vocals"}
+
 # 6-Stem(숨김 기능) 2단계 시간 이동 횟수
 SIX_SHIFTS = {False: 1, True: 2}
 
@@ -408,9 +411,13 @@ def separate(
     base_keys = [k for k in ("vocals", "drums", "bass", "other") if k in raw]
     if engine == "roformer":
         base_keys += [k for k in ("guitar", "piano") if k in raw]
-    raw_sum = sum(raw[k] for k in base_keys)
-    recon = float(np.linalg.norm(raw_sum - mix) / (np.linalg.norm(mix) + 1e-9))
-    del raw_sum
+    if any(n in SINGLE_TARGET_MODELS for n in plan.values()):
+        # 보컬 전용 하위 모델은 보컬 출력만 학습되어 있어 '모든 출력의 합 = 원본' 검사가 의미 없음
+        recon = float("nan")
+    else:
+        raw_sum = sum(raw[k] for k in base_keys)
+        recon = float(np.linalg.norm(raw_sum - mix) / (np.linalg.norm(mix) + 1e-9))
+        del raw_sum
 
     report(0.95, "트랙 저장 중…")
     out_dir = Path(out_dir)
