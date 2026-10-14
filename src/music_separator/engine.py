@@ -88,14 +88,42 @@ class Preset:
 
 
 PRESETS: dict[str, Preset] = {
-    "speed": Preset("speed", "속도 우선", "Demucs 보컬 모델로 빠르게 분리합니다 (CPU 에서도 곡 길이 정도).",
+    "speed": Preset("speed", "속도 우선", "Demucs 보컬 모델로 빠르게 분리합니다 (CPU 버전 기본, CPU 에서도 곡 길이 정도).",
                     "demucs", 2, 1, 0.25),
-    "quality": Preset("quality", "품질 우선", "BS-RoFormer SW 로 분리합니다 (기본·권장).",
+    "quality": Preset("quality", "품질 우선", "BS-RoFormer SW 로 분리합니다 (CUDA 버전·Apple Silicon 기본).",
                       "roformer", 2, 2, 0.5),
     "best": Preset("best", "최고 품질", "구간을 4번 겹쳐 처리해 경계를 더 매끄럽게 합니다 (시간 약 2배, 차이는 작음).",
                    "roformer", 4, 4, 0.5),
 }
 DEFAULT_PRESET = "quality"
+
+
+def build_variant() -> str:
+    """설치 파일 종류: cpu / cuda / arm64(Apple Silicon) / x86_64(Intel Mac). 소스 실행이면 설치된 torch 로 추정."""
+    import json
+    import sys
+
+    from .paths import resource_dir
+
+    try:
+        return str(json.loads((resource_dir() / "build_info.json").read_text(encoding="utf-8"))["variant"])
+    except Exception:
+        pass
+    if sys.platform == "darwin":
+        import platform
+
+        return "arm64" if platform.machine() == "arm64" else "x86_64"
+    try:
+        from importlib.metadata import version
+
+        return "cuda" if "+cu" in version("torch") else "cpu"
+    except Exception:
+        return "cpu"
+
+
+def app_default_preset() -> str:
+    """앱의 기본 처리 방식: CUDA 버전·Apple Silicon 은 품질 우선, CPU 버전·Intel Mac 은 속도 우선."""
+    return "quality" if build_variant() in ("cuda", "arm64") else "speed"
 
 # 한 가지 소스(보컬)만 학습된 하위 모델 — 나머지 출력은 쓰지 않음
 SINGLE_TARGET_MODELS = {"htdemucs_ft_vocals"}

@@ -718,8 +718,9 @@ class MainWindow(QMainWindow):
     def _restore_settings(self):
         s = self.settings
         self.output_dir = Path(s.value("out_dir", str(paths.default_output_dir())))
-        preset = str(s.value("preset", engine.DEFAULT_PRESET))
-        self.preset_btns.get(preset, self.preset_btns[engine.DEFAULT_PRESET]).setChecked(True)
+        default = engine.app_default_preset()          # CPU 버전 = 속도 우선, CUDA 버전 = 품질 우선
+        preset = str(s.value("preset2", default))      # (v1.2.0 의 'preset' 저장값은 쓰지 않음)
+        self.preset_btns.get(preset, self.preset_btns[default]).setChecked(True)
         idx = self.device_combo.findData(s.value("device", "auto"))
         self.device_combo.setCurrentIndex(max(0, idx))
         idx = self.fmt_combo.findData(s.value("fmt", audio_io.DEFAULT_FORMAT))
@@ -744,7 +745,7 @@ class MainWindow(QMainWindow):
     def _save_settings(self):
         s = self.settings
         s.setValue("out_dir", str(self.output_dir))
-        s.setValue("preset", self.preset_key())
+        s.setValue("preset2", self.preset_key())
         s.setValue("device", self.device_combo.currentData())
         s.setValue("fmt", self.fmt_combo.currentData())
         s.setValue("engine2", self.engine_key())
@@ -762,7 +763,7 @@ class MainWindow(QMainWindow):
         for k, b in self.preset_btns.items():
             if b.isChecked():
                 return k
-        return engine.DEFAULT_PRESET
+        return engine.app_default_preset()
 
     def resolved_engine(self, preset: Optional[str] = None) -> str:
         return engine.resolve_engine(self.engine_key(), preset or self.preset_key(),
@@ -1978,7 +1979,8 @@ HELP_TEXT = """[홈 화면 — 원클릭]
    • YouTube 는 권리가 있는 영상만 사용하세요.
 
 [고급 옵션]
-• 처리 방식: 속도 우선(Demucs) / 품질 우선(BS-RoFormer, 기본) / 최고 품질(겹침 4배)
+• 처리 방식: 속도 우선(Demucs) / 품질 우선(BS-RoFormer) / 최고 품질(겹침 4배)
+  기본값: CPU 버전 = 속도 우선, CUDA 버전·Apple Silicon Mac = 품질 우선
 • AI 모델·처리 장치 선택, 트랙별 재생(M 음소거 · S 솔로 · 볼륨), 파형 확대
 • MR 저장(가이드 보컬 작게 남기기 가능) · 보컬만 저장 · 선택/전체 트랙 저장
 • 키 조절과 '보컬 음색(포먼트) 유지' — 보컬 결과물에만 적용

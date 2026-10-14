@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import platform
 import shutil
@@ -50,7 +51,11 @@ def build_rbshift() -> Path:
     raise SystemExit("rbshift 빌드 결과를 찾지 못했습니다")
 
 
-def pyinstaller(bundle_models: str | None):
+def pyinstaller(bundle_models: str | None, variant: str = "cpu"):
+    # 빌드 종류(cpu / cuda / arm64 / x86_64)를 앱 안에 기록 → 기본 처리 방식 결정에 사용
+    info = ROOT / "build" / "build_info.json"
+    info.parent.mkdir(parents=True, exist_ok=True)
+    info.write_text(json.dumps({"variant": variant}), encoding="utf-8")
     env = dict(os.environ)
     if bundle_models:
         env["MS_BUNDLE_MODELS"] = str(Path(bundle_models).resolve())
@@ -147,7 +152,7 @@ def main():
     if not a.skip_pyinstaller:
         if not a.skip_rbshift:
             build_rbshift()
-        pyinstaller(a.bundle_models)
+        pyinstaller(a.bundle_models, a.variant)
     if sys.platform == "win32":
         package_windows(a.variant, a.skip_installer)
     elif sys.platform == "darwin":

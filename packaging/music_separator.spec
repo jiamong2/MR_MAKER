@@ -24,6 +24,8 @@ IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
 
 datas = [(str(ROOT / "assets"), "assets")]
+if (ROOT / "build" / "build_info.json").is_file():     # scripts/build.py 가 기록한 빌드 종류 (cpu / cuda …)
+    datas.append((str(ROOT / "build" / "build_info.json"), "."))
 datas += collect_data_files("demucs", includes=["remote/*.yaml", "remote/*.txt"])
 datas += collect_data_files("imageio_ffmpeg", subdir="binaries")
 datas += collect_data_files("certifi")

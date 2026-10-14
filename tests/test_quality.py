@@ -513,3 +513,16 @@ def test_ft_vocals_model_found_in_htdemucs_ft_folder(tmp_path, monkeypatch):
     assert models.find_model_dir("htdemucs_ft_vocals") == root / "htdemucs_ft"
     m = models.load_model("htdemucs_ft_vocals")
     assert len(m.models) == 1 and "vocals" in m.sources
+
+
+def test_default_preset_by_build(monkeypatch, tmp_path):
+    """CPU 버전·Intel Mac = 속도 우선, CUDA 버전·Apple Silicon = 품질 우선 (빌드 때 기록한 build_info.json 기준)."""
+    import json
+
+    from music_separator import engine, paths
+
+    monkeypatch.setattr(paths, "resource_dir", lambda: tmp_path)
+    for variant, want in [("cpu", "speed"), ("cuda", "quality"), ("arm64", "quality"), ("x86_64", "speed")]:
+        (tmp_path / "build_info.json").write_text(json.dumps({"variant": variant}), encoding="utf-8")
+        assert engine.build_variant() == variant
+        assert engine.app_default_preset() == want

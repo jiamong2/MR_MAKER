@@ -71,7 +71,9 @@ GitHub Actions(4코어 CPU)에서 `scripts/evaluate_separation.py` 로 측정. �
 
 ### 결정
 
-- **품질 우선(기본) = BS-RoFormer SW, 구간 겹침 2**. 보컬·반주 모두 Demucs 보다 약 3dB 좋습니다 (공개 벤치마크·직접 측정 모두).
+- **기본값은 설치 파일에 따라**: CUDA 버전·Apple Silicon Mac = 품질 우선, CPU 버전·Intel Mac = 속도 우선
+  (BS-RoFormer SW 는 CPU 에서 곡 길이의 약 9배(4코어)가 걸려 CPU 버전의 기본으로는 너무 느림 — v1.2.1).
+- **품질 우선 = BS-RoFormer SW, 구간 겹침 2**. 보컬·반주 모두 Demucs 보다 약 3dB 좋습니다 (공개 벤치마크·직접 측정 모두).
   직접 측정에서도 보컬 SDR +3.2dB, 반주 SDR +3.2dB, MR 에 남는 보컬 −7dB (htdemucs_ft 대비).
   2-Stem 전용 모델이 아니라 6-Stem 모델이지만, 보컬 SDR 이 공개된 보컬 전용 모델들(10.9~11.0dB)보다 높아 그대로 씁니다.
   반주는 *원본 − 보컬* 로 만들어 악기 소리를 AI 가 다시 만들지 않으므로, 악기 고음·드럼 어택·베이스 저역·스테레오 이미지가 원본 그대로 남고
