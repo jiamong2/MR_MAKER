@@ -145,13 +145,15 @@ def run(model: Optional[str] = None, allow_download: bool = True, report: Option
                 # 실제 모델이면 모델 출력의 합이 원본과 거의 같아야 함 (가중치가 제대로 로드됐는지 확인)
                 assert res.raw_recon_error < 0.35, f"model outputs do not sum to the mix ({res.raw_recon_error:.2f})"
             elif real:
-                # 보컬 전용 모델: 보컬 추정이 비어 있지도, 원본을 그대로 통과시키지도 않아야 함
+                # 보컬 전용 모델: 시험 신호의 '목소리'는 합성음이라 실제 보컬 모델은 거의 보컬로 보지 않음.
+                # 같은 신호·같은 모델이면 결과가 결정적이므로 기준값(Windows CPU·macOS GPU 모두 약 0.013) 주변인지로
+                # 가중치·추론이 플랫폼마다 제대로 동작하는지 확인 (0 = 출력 없음, 1 = 원본 그대로 통과, 큰 값 = 잡음)
                 v = stems["vocals"]
                 ratio = float(np.sqrt((v ** 2).mean()) / (np.sqrt((mix ** 2).mean()) + 1e-9))
                 corr = float(np.dot(v.reshape(-1), mix.reshape(-1)) /
                              (np.linalg.norm(v) * np.linalg.norm(mix) + 1e-9))
                 out["vocal_rms_ratio"], out["vocal_mix_corr"] = round(ratio, 4), round(corr, 4)
-                assert 0.003 < ratio < 0.95 and corr > 0.05, f"vocal model output looks wrong (rms {ratio:.3f}, corr {corr:.2f})"
+                assert 0.004 < ratio < 0.06, f"vocal model output looks wrong (rms ratio {ratio:.4f}, corr {corr:.3f})"
             holder["res"] = res
             return out
         holder: dict = {}
