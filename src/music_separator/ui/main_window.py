@@ -1638,11 +1638,13 @@ class MainWindow(QMainWindow):
                 log.debug("estimate failed", exc_info=True)
         self.home.set_file_detail(detail)
 
-    def _home_steps(self, kind: str, semitones: int) -> list:
+    def _home_steps(self, kind: str, semitones: int, target: str = "mr") -> list:
         steps = [("check", "입력 확인")]
         if kind == "youtube":
             steps.append(("acquire", "오디오 가져오기"))
-        steps += [("decode", "디코딩"), ("model", "AI 모델 준비"), ("separate", "AI 음원 분리")]
+        steps.append(("decode", "디코딩"))
+        if target != "original":
+            steps += [("model", "AI 모델 준비"), ("separate", "AI 음원 분리")]
         if semitones:
             steps.append(("key", "키 조절"))
         steps.append(("encode", "저장"))
@@ -1682,9 +1684,9 @@ class MainWindow(QMainWindow):
         t.failed.connect(self._on_home_failed)
         t.cancelled.connect(self._on_home_cancelled)
         t.finished.connect(lambda: (self._thread_finished("pipeline_thread"), self._home_finished()))
-        h.status.set_steps(self._home_steps(kind, spec.semitones))
+        h.status.set_steps(self._home_steps(kind, spec.semitones, spec.target))
         resolved = engine.resolve_engine(spec.engine, preset, model_override)
-        h.status.fast_btn.setVisible(resolved == "roformer" and device == "cpu")
+        h.status.fast_btn.setVisible(resolved == "roformer" and device == "cpu" and spec.target != "original")
         h.status.set_progress(0.0, "준비 중…", self._job_subtitle(spec, resolved, device))
         h.set_busy(True)
         self._job_t0 = __import__("time").monotonic()
@@ -1695,6 +1697,8 @@ class MainWindow(QMainWindow):
         self.set_status("홈 화면에서 음원 추출 중…", "busy")
 
     def _job_subtitle(self, spec, resolved: str, device: str) -> str:
+        if spec.target == "original":
+            return "원본 그대로 저장 (분리 없음)" + (f" · 키 {spec.semitones:+d}" if spec.semitones else "")
         dev = {"cuda": "NVIDIA GPU", "mps": "Apple GPU", "cpu": "CPU"}.get(device, device)
         txt = f"{engine.ENGINES[resolved].short} · {engine.PRESETS[spec.preset].title} · {dev}"
         if resolved == "roformer" and device == "cpu":
@@ -1730,8 +1734,9 @@ class MainWindow(QMainWindow):
     def _on_home_done(self, res):
         self.last_job = res
         self.last_prep = res.prepared
-        self.last_sep = res.separation
-        self.last_sep_key = getattr(res, "separation_key", None)
+        if res.separation is not None:         # 원본 저장은 이전 분리 결과를 그대로 둠
+            self.last_sep = res.separation
+            self.last_sep_key = getattr(res, "separation_key", None)
         self.home.status.finish_all()
         exp = res.export
         lines = []
@@ -1752,9 +1757,13 @@ class MainWindow(QMainWindow):
             detail.append(f"입력: {inp['codec'].upper()} · {inp['sample_rate'] / 1000:g}kHz"
                           + (f" · {inp['bit_rate_kbps']}kbps" if inp['bit_rate_kbps'] and not inp['lossless'] else ""))
         sep = rep["separation"]
-        dev = {"cuda": "NVIDIA GPU", "mps": "Apple GPU", "cpu": "CPU"}.get(sep["device"], sep["device"])
-        detail.append(f"분리: {engine.ENGINES[sep['engine']].short} ({engine.PRESETS[sep['preset']].title}) · {dev}"
-                      + (" · 이전 결과 재사용" if sep["reused"] else f" · {audio_io.format_time(sep['elapsed_sec'])}"))
+        if sep is None:
+            detail.append("분리: 없음 (원본 오디오 그대로)")
+        else:
+            dev = {"cuda": "NVIDIA GPU", "mps": "Apple GPU", "cpu": "CPU"}.get(sep["device"], sep["device"])
+            detail.append(f"분리: {engine.ENGINES[sep['engine']].short} ({engine.PRESETS[sep['preset']].title}) · {dev}"
+                          + (" · 이전 결과 재사용" if sep["reused"]
+                             else f" · {audio_io.format_time(sep['elapsed_sec'])}"))
         steps = rep["decode"]["resample_steps"]
         lossy = rep.get("lossy_encodes", 0)
         detail.append("처리: float32 무손실 중간 데이터 · "
@@ -1762,7 +1771,8 @@ class MainWindow(QMainWindow):
                       + (f" · 손실 압축은 최종 MP3 저장 {lossy}회뿐" if lossy else " · 손실 압축 없음"))
         if exp.gain_db < 0:
             detail.append(f"0dBFS 를 넘는 부분이 있어 음량을 {abs(exp.gain_db):.1f}dB 낮췄습니다 (리미터 없이 고정 배율).")
-        title = {"mr": "반주(MR) 파일을 저장했습니다", "vocals": "보컬 파일을 저장했습니다"}.get(
+        title = {"mr": "반주(MR) 파일을 저장했습니다", "vocals": "보컬 파일을 저장했습니다",
+                 "original": "원본 오디오를 저장했습니다"}.get(
             self._job_spec.target, "파일을 저장했습니다")
         self.home.show_result(title, "<br>".join(lines), "\n".join(detail))
         self._adopt_pipeline_result(res)
@@ -1818,6 +1828,8 @@ class MainWindow(QMainWindow):
             la = LoadedAudio(prep.source_path, prep.mix44_path, prep.n_samples, prep.peaks, prep.native_rate,
                              prep.native_path, title=prep.title, source_id=prep.source_id)
             self._on_loaded(la)
+            if res.separation is None:          # 원본만 저장한 경우: 원본만 불러옴
+                return
             self._purge_cache(keep=self._top_dirs([prep.mix44_path, prep.native_path] +
                                                   [s.path for s in res.separation.stems]))
             self._on_separated(res.separation)

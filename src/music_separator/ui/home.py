@@ -11,7 +11,7 @@ from typing import Optional
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import (QAbstractButton, QButtonGroup, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+from PySide6.QtWidgets import (QAbstractButton, QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
                                QProgressBar, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
 
 from .. import APP_BRAND, APP_SHORT, audio_io, pitch, youtube
@@ -632,6 +632,7 @@ class HomePage(QWidget):
         self.setObjectName("HomeRoot")
         self.file_path: Optional[Path] = None
         self._compact = None
+        self._has_result = False
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
@@ -776,6 +777,13 @@ class HomePage(QWidget):
         self.vocal_card.toggled.connect(lambda on: on and self.targetChanged.emit("vocals"))
         self.mr_card.toggled.connect(lambda on: on and self.targetChanged.emit("mr"))
         lay.addWidget(self.target_box)
+        # YouTube 입력일 때만: 분리하지 않고 받은 오디오를 그대로(키 조절은 적용) 저장
+        self.orig_box = QCheckBox("분리하지 않고 원본 오디오 그대로 저장")
+        self.orig_box.setToolTip("YouTube에서 받은 오디오를 보컬/반주 분리 없이 저장합니다. 키 조절은 그대로 적용됩니다.")
+        self.orig_box.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.orig_box.toggled.connect(self._orig_toggled)
+        self.orig_box.hide()
+        lay.addWidget(self.orig_box)
         self._gaps.append(lay.count())
         lay.addSpacing(6)
 
@@ -964,12 +972,43 @@ class HomePage(QWidget):
             self.active_badge.hide()
             self.input_hint.setText("")
         self.input_hint.setVisible(bool(self.input_hint.text()))
+        if not hasattr(self, "orig_box"):
+            return
+        self.orig_box.setVisible(url_active)
+        status = getattr(self, "status", None)
+        busy = status is not None and not status.isHidden()
+        orig = self.original_mode()
+        for c in (self.vocal_card, self.mr_card):
+            c.setEnabled(not busy and not orig)
+        self.orig_box.setEnabled(not busy)
+        self._update_start_text()
+
+    def original_mode(self) -> bool:
+        return self.source_kind() == "youtube" and self.orig_box.isChecked()
 
     def target(self) -> str:
+        if self.original_mode():
+            return "original"
         return "vocals" if self.vocal_card.isChecked() else "mr"
 
     def set_target(self, t: str):
-        (self.vocal_card if t == "vocals" else self.mr_card).setChecked(True)
+        self.orig_box.setChecked(t == "original")
+        if t != "original":
+            (self.vocal_card if t == "vocals" else self.mr_card).setChecked(True)
+        self._refresh_source()
+
+    def _orig_toggled(self, _on: bool):
+        self._refresh_source()
+        self.targetChanged.emit(self.target())
+
+    def _update_start_text(self):
+        if not hasattr(self, "start_btn"):
+            return
+        orig = self.original_mode()
+        if self._has_result:
+            self.start_btn.setText("다시 저장" if orig else "다시 추출")
+        else:
+            self.start_btn.setText("원본 저장 시작" if orig else "음원 추출 시작")
 
     # --------------------------------------------------------------- 키 ---
     def _key_changed(self, v: int):
@@ -1004,7 +1043,8 @@ class HomePage(QWidget):
                           f"<a href='settings' style='color:{theme.ACCENT_2}; text-decoration:none;'>변경</a>")
 
     def set_busy(self, busy: bool):
-        for w in (self.drop, self.url, self.vocal_card, self.mr_card, self.key, self.key_down, self.key_up,
+        for w in (self.drop, self.url, self.vocal_card, self.mr_card, self.orig_box, self.key, self.key_down,
+                  self.key_up,
                   self.key_reset, self.adv_btn, self.gear):
             w.setEnabled(not busy)
         self.start_btn.setVisible(not busy)
@@ -1025,7 +1065,8 @@ class HomePage(QWidget):
         self.result.detail.setText(detail)
         self.error.hide()
         self.result.show()
-        self.start_btn.setText("다시 추출")
+        self._has_result = True
+        self._update_start_text()
         self._scroll_to(self.result)
 
     def show_error(self, title: str, msg: str, retry: bool, fast: bool, update: bool):
@@ -1037,7 +1078,8 @@ class HomePage(QWidget):
     def reset_panels(self):
         self.result.hide()
         self.error.hide()
-        self.start_btn.setText("음원 추출 시작")
+        self._has_result = False
+        self._update_start_text()
 
     def _scroll_to(self, w: QWidget):
         from PySide6.QtCore import QTimer

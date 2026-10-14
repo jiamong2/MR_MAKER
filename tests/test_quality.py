@@ -390,6 +390,36 @@ def test_pipeline_outputs_only_selected_target(tmp_path):
         assert len(files) == 1
 
 
+def test_pipeline_original_target_skips_separation(tmp_path, monkeypatch):
+    """'원본 그대로' : AI 분리 없이 원본(원래 샘플레이트)을 저장하고, 키는 원본에 한 번만 적용."""
+    from music_separator import audio_io, engine, pipeline, pitch
+
+    def no_sep(*a, **k):
+        raise AssertionError("original target must not run separation")
+    monkeypatch.setattr(pipeline.Pipeline, "separate", no_sep)
+    monkeypatch.setattr(engine, "separate", no_sep, raising=False)
+    src = _input(tmp_path, 48000)
+    stages = []
+    spec = pipeline.JobSpec(str(src), tmp_path / "out", target="original", fmt="wav32f")
+    res = pipeline.Pipeline(spec, tmp_path / "work", progress=lambda s, f, o, m: stages.append((s, o))).run()
+    assert res.separation is None and res.report["separation"] is None
+    assert len(res.files) == 1 and "원본" in res.files[0].name
+    y = audio_io.decode_audio(res.files[0], None)
+    native = audio_io.decode_audio(src, None)
+    assert audio_io.probe_audio(res.files[0]).sample_rate == 48000
+    assert len(y) == len(native) and np.max(np.abs(y - native)) < 1e-6      # 비트 단위로 원본 그대로
+    assert not any(s in ("model", "separate") for s, _ in stages)
+    assert max(o for _, o in stages) <= 1.0
+
+    calls = []
+    real = pitch.shift
+    monkeypatch.setattr(pitch, "shift", lambda d, s, r=44100, formant=False, cancel=None:
+                        calls.append((s, r, formant)) or real(d, s, r, formant=formant, cancel=cancel))
+    spec = pipeline.JobSpec(str(src), tmp_path / "out2", target="original", semitones=2)
+    res = pipeline.Pipeline(spec, tmp_path / "work2").run()
+    assert calls == [(2, 48000, False)] and "원본 [Key +2]" in res.files[0].name
+
+
 def test_pipeline_mr_is_native_original_minus_vocals(tmp_path, monkeypatch):
     from music_separator import audio_io, pipeline, pitch
 

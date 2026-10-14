@@ -33,7 +33,7 @@ from .export import ExportCancelled, Exporter, ExportJob, ExportOptions, ExportR
 
 log = logging.getLogger(__name__)
 
-TARGETS = {"mr": "반주(MR)", "vocals": "보컬", "both": "보컬 + 반주"}
+TARGETS = {"mr": "반주(MR)", "vocals": "보컬", "both": "보컬 + 반주", "original": "원본 (분리 없음)"}
 
 # (키, 표시 이름, 전체 진행률에서 차지하는 비중)
 STAGES = [
@@ -67,7 +67,7 @@ class PipelineError(Exception):
 class JobSpec:
     source: str                       # 로컬 파일 경로 또는 YouTube URL
     out_dir: Path
-    target: str = "mr"                # mr / vocals / both
+    target: str = "mr"                # mr / vocals / both / original(분리 없이 원본 그대로)
     semitones: int = 0
     fmt: str = audio_io.DEFAULT_FORMAT
     preset: str = engine.DEFAULT_PRESET
@@ -100,7 +100,7 @@ class Prepared:
 class JobResult:
     files: list
     prepared: Prepared
-    separation: engine.SeparationResult
+    separation: Optional[engine.SeparationResult]   # target == "original" 이면 None
     export: ExportReport
     report: dict
     reused_separation: bool = False
@@ -149,11 +149,14 @@ class Pipeline:
         self.cancel = cancel or threading.Event()
         self.stage = "check"
         offs, acc = {}, 0.0
+        skip = ("model", "separate") if spec.target == "original" else ()
+        total = sum(w for k, _, w in STAGES if k not in skip)
         for k, _, w in STAGES:
             offs[k] = acc
-            acc += w
+            if k not in skip:
+                acc += w / total
         self._off = offs
-        self._w = {k: w for k, _, w in STAGES}
+        self._w = {k: (0.0 if k in skip else w / total) for k, _, w in STAGES}
         self.t0 = time.monotonic()
 
     # ------------------------------------------------------------ helpers ---
@@ -313,14 +316,18 @@ class Pipeline:
                                                                                  s.model_override)), s.preset)
 
     # ---------------------------------------------------------- 7~11 단계 ---
-    def export(self, prep: Prepared, res: engine.SeparationResult) -> ExportReport:
+    def export(self, prep: Prepared, res: Optional[engine.SeparationResult]) -> ExportReport:
         spec = self.spec
         self.enter("key" if spec.semitones else "encode",
                    f"키 조절 중 ({pitch.key_label(spec.semitones)}, {pitch.engine_name()})…" if spec.semitones
                    else "저장 준비 중…")
-        src = ExportSource(stems={st.key: st.path for st in res.stems}, residual_key=res.stems[-1].key,
-                           mix44_path=prep.mix44_path, native_path=prep.native_path, native_rate=prep.native_rate,
-                           model_rate=res.model_rate)
+        if res is None:     # 원본 그대로: 분리 결과 없이 원본(+키 조절)만 저장
+            src = ExportSource(stems={}, residual_key="", mix44_path=prep.mix44_path, native_path=prep.native_path,
+                               native_rate=prep.native_rate, model_rate=engine.MODEL_RATE)
+        else:
+            src = ExportSource(stems={st.key: st.path for st in res.stems}, residual_key=res.stems[-1].key,
+                               mix44_path=prep.mix44_path, native_path=prep.native_path,
+                               native_rate=prep.native_rate, model_rate=res.model_rate)
         opts = ExportOptions(keep_native_rate=spec.keep_native_rate, semitones=spec.semitones,
                              formant_vocals=spec.formant_vocals)
         jobs = self.jobs(prep, res)
@@ -368,7 +375,7 @@ class Pipeline:
                     pass
             raise PipelineError(engine.friendly_error(exc, "저장"), self.stage, "output", True) from exc
 
-    def jobs(self, prep: Prepared, res: engine.SeparationResult) -> list[ExportJob]:
+    def jobs(self, prep: Prepared, res: Optional[engine.SeparationResult]) -> list[ExportJob]:
         spec = self.spec
         ext = audio_io.EXPORT_FORMATS[spec.fmt][1]
         song = audio_io.safe_filename(prep.title, 60)
@@ -381,6 +388,9 @@ class Pipeline:
         if spec.target in ("mr", "both"):
             p = audio_io.unique_path(song_dir / audio_io.safe_filename(f"{song} - MR (보컬 제거){key}{ext}"))
             out.append(ExportJob(p, spec.fmt, "MR", "mr", excluded=["vocals"], gains={}))
+        if spec.target == "original":
+            p = audio_io.unique_path(song_dir / audio_io.safe_filename(f"{song} - 원본{key}{ext}"))
+            out.append(ExportJob(p, spec.fmt, "원본", "mr", excluded=[], gains={}))
         return out
 
     # ------------------------------------------------------------- 전체 ---
@@ -388,13 +398,17 @@ class Pipeline:
             previous_sep: Optional[engine.SeparationResult] = None,
             previous_sep_key: Optional[tuple] = None) -> JobResult:
         prep = self.prepare(previous_prep)
-        res, reused = self.separate(prep, previous_sep, previous_sep_key)
+        if self.spec.target == "original":
+            res, reused = None, False
+        else:
+            res, reused = self.separate(prep, previous_sep, previous_sep_key)
         exp = self.export(prep, res)
         self.stage = "encode"
         self._progress("done", 1.0, 1.0, "완료")
         return JobResult(exp.files, prep, res, exp, self.build_report(prep, res, exp, reused), reused)
 
-    def build_report(self, prep: Prepared, res: engine.SeparationResult, exp: ExportReport, reused: bool) -> dict:
+    def build_report(self, prep: Prepared, res: Optional[engine.SeparationResult], exp: ExportReport,
+                     reused: bool) -> dict:
         info = prep.info
         r = {
             "input": {
@@ -404,9 +418,10 @@ class Pipeline:
             },
             "decode": {"native_rate": prep.native_rate, "resample_steps": prep.resample_steps,
                        "intermediate": "float32 PCM (.npy, 무손실)"},
-            "separation": {"engine": res.engine, "model": res.model, "preset": res.preset, "device": res.device,
-                           "elapsed_sec": round(res.elapsed, 1), "model_rate": res.model_rate,
-                           "reused": reused, "stems_sum_to_original": True},
+            "separation": None if res is None else {
+                "engine": res.engine, "model": res.model, "preset": res.preset, "device": res.device,
+                "elapsed_sec": round(res.elapsed, 1), "model_rate": res.model_rate,
+                "reused": reused, "stems_sum_to_original": True},
             "outputs": [{
                 "file": str(d.path), "format": d.fmt, "sample_rate": d.sample_rate, "seconds": round(d.seconds, 3),
                 "channels": d.channels, "peak_dbfs": round(d.peak_db, 2),
