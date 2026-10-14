@@ -17,7 +17,7 @@
 ## 1. 구조 한눈에 보기
 
 ```
-music-separator/
+MR_MAKER/
 ├─ run.py                         진입점 (소스 실행 / PyInstaller 공용)
 ├─ src/music_separator/
 │  ├─ app.py                      앱 시작, 로깅, 명령행 옵션(--selftest, --gui-smoke)
@@ -121,10 +121,10 @@ GitHub 이 제공하는 Windows·macOS 가상 머신에서 빌드합니다.
 
 1. GitHub 에 새 저장소를 만들고 이 폴더 전체를 push 합니다.
    ```bash
-   cd music-separator
+   cd MR_MAKER
    git init && git add . && git commit -m "MR MAKER 1.0.0"
    git branch -M main
-   git remote add origin https://github.com/<아이디>/music-separator.git
+   git remote add origin https://github.com/<아이디>/MR_MAKER.git
    git push -u origin main
    ```
 2. push 하면 **Actions** 탭에서 `Build` 워크플로가 자동 실행됩니다. 직접 실행하려면 *Actions → Build → Run workflow*.

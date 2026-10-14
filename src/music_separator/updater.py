@@ -22,7 +22,7 @@ from . import __version__
 
 log = logging.getLogger(__name__)
 
-REPO = "jiamong2/music-separator"
+REPO = "jiamong2/MR_MAKER"
 API_LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases/latest"
 
