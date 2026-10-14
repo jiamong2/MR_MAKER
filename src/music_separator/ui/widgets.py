@@ -11,7 +11,7 @@ import numpy as np
 from PySide6.QtCore import (Property, QEasingCurve, QObject, QPointF, QPropertyAnimation, QRectF, QSize, Qt,
                             Signal)
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
-from PySide6.QtWidgets import (QAbstractButton, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel,
+from PySide6.QtWidgets import (QAbstractButton, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QMenu,
                                QPushButton, QSizePolicy, QSlider, QVBoxLayout, QWidget)
 
 from . import icons, theme
@@ -927,3 +927,54 @@ class DropZone(QFrame):
         p.setBrush(QColor(52, 120, 246, 18) if self._hover else QColor(theme.SURFACE_2))
         p.drawRoundedRect(inner, 14, 14)
         p.end()
+
+
+class PathMenu(QMenu):
+    """글자를 벡터 외곽선으로 직접 그리는 메뉴.
+
+    Windows 팝업 메뉴 창에서 Pretendard 의 얇은 가로획('그' 의 'ㅡ' 등)이 래스터라이저에서 사라지는
+    문제가 있어, 글꼴 렌더러를 거치지 않고 QPainterPath 로 채워 그린다. 크기·키보드·단축키 동작은 QMenu 그대로.
+    """
+
+    PAD_X = 18
+
+    def paintEvent(self, e):  # noqa: N802
+        from PySide6.QtGui import QFontMetricsF, QKeySequence
+
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setPen(QPen(QColor(theme.BORDER_2), 1))
+        p.setBrush(QColor(theme.SURFACE))
+        p.drawRoundedRect(r, 10, 10)
+        f = theme.font(13)
+        fm = QFontMetricsF(f)
+        active = self.activeAction()
+        for a in self.actions():
+            if not a.isVisible():
+                continue
+            g = QRectF(self.actionGeometry(a))
+            if a.isSeparator():
+                y = round(g.center().y()) + 0.5
+                p.setPen(QPen(QColor(theme.BORDER), 1))
+                p.drawLine(QPointF(g.left() + 8, y), QPointF(g.right() - 8, y))
+                continue
+            if a is active and a.isEnabled():
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(theme.ACCENT_SOFT))
+                p.drawRoundedRect(g.adjusted(1, 0, -1, 0), 6, 6)
+            color = QColor(theme.TEXT if a.isEnabled() else theme.TEXT_FAINT)
+            base = g.center().y() + (fm.ascent() - fm.descent()) / 2
+            text = a.text().replace("&&", "\0").replace("&", "").replace("\0", "&").split("\t")[0]
+            self._fill_text(p, f, QPointF(g.left() + self.PAD_X, base), text, color)
+            sc = a.shortcut().toString(QKeySequence.SequenceFormat.NativeText)
+            if sc:
+                x = g.right() - self.PAD_X - fm.horizontalAdvance(sc)
+                self._fill_text(p, f, QPointF(x, base), sc, QColor(theme.TEXT_DIM))
+        p.end()
+
+    @staticmethod
+    def _fill_text(p: QPainter, f: QFont, at: QPointF, text: str, color: QColor):
+        path = QPainterPath()
+        path.addText(QPointF(round(at.x()), round(at.y())), f, text)
+        p.fillPath(path, color)

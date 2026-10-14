@@ -12,7 +12,7 @@ from typing import Optional
 from PySide6.QtCore import QProcess, QSettings, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame,
-                               QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu,
+                               QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow,
                                QMessageBox, QProgressBar, QPushButton, QScrollArea, QScrollBar, QSizePolicy, QSlider,
                                QStackedWidget, QVBoxLayout, QWidget)
 
@@ -23,7 +23,7 @@ from ..player import Mixer, Player, Track
 from . import icons, theme
 from .home import HomePage
 from .widgets import (COLUMN_GAP, HEADER_WIDTH, ROW_SPACING, ChipButton, DropZone, ElideLabel, Lcd, LogoTile,
-                      PlayButton, TimeRuler, TrackRow, TracksPanel, Viewport, glow, icon_button, label, repolish,
+                      PathMenu, PlayButton, TimeRuler, TrackRow, TracksPanel, Viewport, glow, icon_button, label, repolish,
                       text_button)
 from ..export import ExportJob, ExportOptions, ExportSource
 from .workers import (ExportThread, KeyThread, LoadedAudio, LoadThread, PipelineThread, SeparationThread,
@@ -682,7 +682,7 @@ class MainWindow(QMainWindow):
         return bar
 
     def _build_menu(self):
-        menu = QMenu(self)
+        menu = PathMenu(self)
         acts = [
             ("홈 화면", self.show_home, None),
             ("파일 열기…", self.browse_file, QKeySequence.StandardKey.Open),
