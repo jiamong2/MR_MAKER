@@ -732,14 +732,19 @@ class MainWindow(QMainWindow):
     def _restore_settings(self):
         s = self.settings
         self.output_dir = Path(s.value("out_dir", str(paths.default_output_dir())))
+        # 처리 방식·모델·장치는 설치 종류(cpu/cuda…)별로 따로 저장하고, 기본값과 같으면 저장하지 않는다.
+        # (예전엔 버전끼리 같은 값을 공유해 CUDA 버전의 '품질' 이 CPU 버전에도 적용됐다)
+        for old in ("preset", "preset2", "engine2", "device"):
+            s.remove(old)
+        vk = self._variant_key
         default = engine.app_default_preset()          # CPU 버전 = 속도 우선, CUDA 버전 = 품질 우선
-        preset = str(s.value("preset2", default))      # (v1.2.0 의 'preset' 저장값은 쓰지 않음)
+        preset = str(s.value(vk("preset"), default))
         self.preset_btns.get(preset, self.preset_btns[default]).setChecked(True)
-        idx = self.device_combo.findData(s.value("device", "auto"))
+        idx = self.device_combo.findData(s.value(vk("device"), "auto"))
         self.device_combo.setCurrentIndex(max(0, idx))
         idx = self.fmt_combo.findData(s.value("fmt", audio_io.DEFAULT_FORMAT))
         self.fmt_combo.setCurrentIndex(max(0, idx))
-        idx = self.engine_combo.findData(s.value("engine2", "auto"))     # v1.2 부터 기본 '자동'
+        idx = self.engine_combo.findData(s.value(vk("engine"), "auto"))
         self.engine_combo.blockSignals(True)
         self.engine_combo.setCurrentIndex(max(0, idx))
         self.engine_combo.blockSignals(False)
@@ -759,16 +764,25 @@ class MainWindow(QMainWindow):
     def _save_settings(self):
         s = self.settings
         s.setValue("out_dir", str(self.output_dir))
-        s.setValue("preset2", self.preset_key())
-        s.setValue("device", self.device_combo.currentData())
+        vk = self._variant_key
+        for key, val, default in (("preset", self.preset_key(), engine.app_default_preset()),
+                                  ("engine", self.engine_key(), "auto"),
+                                  ("device", self.device_combo.currentData() or "auto", "auto")):
+            if val == default:
+                s.remove(vk(key))
+            else:
+                s.setValue(vk(key), val)
         s.setValue("fmt", self.fmt_combo.currentData())
-        s.setValue("engine2", self.engine_key())
         s.setValue("keep_native", self.keep_native_rate)
         s.setValue("formant", self.formant_box.isChecked())
         s.setValue("guide", self.guide_box.isChecked())
         s.setValue("guide_level", self.guide_slider.value())
         s.setValue("target", self.home.target())
         s.sync()
+
+    @staticmethod
+    def _variant_key(name: str) -> str:
+        return f"{engine.build_variant()}/{name}"
 
     def engine_key(self) -> str:
         return self.engine_combo.currentData() or "auto"

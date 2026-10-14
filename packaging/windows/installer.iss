@@ -75,6 +75,10 @@ Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags
 ; 프로그램 내 [업데이트] 로 조용히 설치한 경우(/relaunch=1) 설치 후 다시 실행
 Filename: "{app}\{#AppExe}"; Flags: nowait runasoriginaluser; Check: ShouldRelaunch
 
+[Registry]
+; 프로그램 설정(HKCU\Software\MusicSeparator)은 삭제할 때 함께 지움. 업데이트(덮어쓰기 설치)에서는 유지됨
+Root: HKCU; Subkey: "Software\MusicSeparator"; Flags: uninsdeletekey dontcreatekey
+
 [UninstallDelete]
 ; 임시 캐시는 삭제. 다운로드한 AI 모델(%LOCALAPPDATA%\MusicSeparator\models)은 재설치를 위해 유지
 Type: filesandordirs; Name: "{localappdata}\MusicSeparator\cache"

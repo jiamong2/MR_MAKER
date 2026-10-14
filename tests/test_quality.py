@@ -564,3 +564,47 @@ def test_updater_release_parsing():
     assert updater.parse_release(rel("v0.0.1", names), "cpu", auto=True) is None      # 구버전
     assert updater.parse_release(rel("v99.0.0", names, draft=True), "cpu", auto=True) is None
     assert updater.is_newer("1.10.0", "1.9.9") and not updater.is_newer("1.2.2", "1.2.2")
+
+
+def test_settings_are_per_build_variant(tmp_path, monkeypatch):
+    """CUDA 버전에서 고른 처리 방식이 CPU 버전 기본값을 덮어쓰지 않아야 한다."""
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setenv("MUSIC_SEPARATOR_NONINTERACTIVE", "1")
+    from PySide6.QtCore import QSettings
+    from PySide6.QtWidgets import QApplication
+
+    from music_separator import engine
+    from music_separator.ui import main_window, theme
+
+    app = QApplication.instance() or QApplication([])
+    theme.apply(app)
+    ini = str(tmp_path / "s.ini")
+    legacy = QSettings(ini, QSettings.Format.IniFormat)
+    legacy.setValue("preset2", "quality")        # 예전 버전이 남긴 공용 값
+    legacy.setValue("engine2", "bs_roformer_sw")
+    legacy.sync()
+
+    def open_win(variant):
+        monkeypatch.setattr(engine, "build_variant", lambda: variant)
+        w = main_window.MainWindow(QSettings(ini, QSettings.Format.IniFormat))
+        return w
+
+    w = open_win("cpu")
+    assert w.preset_key() == "speed" and w.engine_key() == "auto"   # 공용 예전 값 무시
+    w.close(); w.device_thread.wait(15000); w.deleteLater()
+
+    w = open_win("cuda")
+    assert w.preset_key() == "quality"
+    w.preset_btns["best"].setChecked(True)
+    chosen = w.preset_key()
+    w.close(); w.device_thread.wait(15000); w.deleteLater()
+
+    w = open_win("cpu")
+    assert w.preset_key() == "speed"                                  # CUDA 쪽 선택이 넘어오지 않음
+    w.close(); w.device_thread.wait(15000); w.deleteLater()
+
+    w = open_win("cuda")
+    assert w.preset_key() == chosen                                   # 자기 선택은 유지
+    w.close(); w.device_thread.wait(15000); w.deleteLater()
+    s = QSettings(ini, QSettings.Format.IniFormat)
+    assert s.value("cpu/preset") is None                              # 기본값은 저장하지 않음
