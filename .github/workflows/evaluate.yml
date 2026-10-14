@@ -1,0 +1,89 @@
+# 음질 검증 — 수동 실행 (Actions → Evaluate → Run workflow) 또는 eval/* 브랜치 push
+#
+# 1) 2-Stem 분리 품질 비교: MUSDB18 7초 샘플 테스트 50곡 (정답 트랙과 SDR·보컬 잔류·반주 누출·스테레오 폭)
+# 2) YouTube 오디오 획득: CC-BY 영상으로 선택 스트림·재인코딩 여부·리샘플링 단계 확인
+# 결과는 실행 페이지의 Annotations(요약)와 Artifacts(JSON)에 남습니다.
+name: Evaluate
+
+on:
+  workflow_dispatch:
+    inputs:
+      tracks:
+        description: "곡 수 (최대 50)"
+        type: string
+        default: "50"
+  push:
+    branches: ["eval/**"]
+    paths:
+      - scripts/evaluate_separation.py
+      - scripts/youtube_check.py
+      - src/music_separator/engine.py
+      - src/music_separator/roformer.py
+      - .github/workflows/evaluate.yml
+
+env:
+  PYTHONUTF8: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  separation:
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [htdemucs, ft_speed, ft_quality, sw, sw_best]
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    name: separation (${{ matrix.config }})
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/*.txt
+      - name: Install
+        run: |
+          pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements/common.txt
+          pip install --no-deps -r requirements/demucs.txt
+      - uses: actions/cache@v6
+        with:
+          path: .msdata/models
+          key: eval-models-v1-${{ matrix.config }}
+      - name: Separation quality (MUSDB18-7 test set)
+        env:
+          MUSIC_SEPARATOR_DATA_DIR: ${{ github.workspace }}/.msdata
+        run: |
+          nproc; free -g | head -2
+          python scripts/evaluate_separation.py --data build/musdb7 --configs "${{ matrix.config }}" \
+            --tracks "${{ inputs.tracks || '50' }}" --out "separation_eval_${{ matrix.config }}.json" --annotate
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: separation-eval-${{ matrix.config }}
+          path: separation_eval_*.json
+          retention-days: 30
+
+  youtube:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/*.txt
+      - name: Install
+        run: |
+          pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements/common.txt
+          pip install --no-deps -r requirements/demucs.txt
+      - name: YouTube audio acquisition check (CC-BY videos)
+        run: python scripts/youtube_check.py --annotate
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: youtube-check
+          path: youtube_check.json
+          retention-days: 30

@@ -9,8 +9,13 @@ imageio-ffmpeg==0.6.0
 lameenc==1.8.4
 einops==0.8.2
 julius==0.2.8
-# 키 조절(피치 시프트): Signalsmith Stretch 바인딩, MIT
+# 고품질 리샘플링 (soxr VHQ), LGPL-2.1+
+soxr==1.1.0
+# 키 조절 대체 엔진(기본은 native/rbshift = Rubber Band): Signalsmith Stretch 바인딩, MIT
 python-stretch==0.3.1
+# YouTube 오디오 (yt-dlp + 챌린지 해석용 yt-dlp-ejs + JavaScript 엔진 Deno)
+yt-dlp[default]==2026.8.19
+deno==2.9.7
 pyyaml>=6.0
 safetensors>=0.4
 tqdm>=4.66

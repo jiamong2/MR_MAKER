@@ -9,41 +9,37 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QSettings, QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QProcess, QSettings, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame,
-                               QGridLayout, QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox, QProgressBar,
-                               QScrollArea, QScrollBar, QSizePolicy, QSlider, QStackedWidget,
-                               QVBoxLayout, QWidget)
+                               QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu,
+                               QMessageBox, QProgressBar, QPushButton, QScrollArea, QScrollBar, QSizePolicy, QSlider,
+                               QStackedWidget, QVBoxLayout, QWidget)
 
-from .. import APP_BRAND, APP_NAME, APP_SHORT, __version__, audio_io, engine, models, paths, pitch, system
+from .. import (APP_BRAND, APP_NAME, APP_SHORT, __version__, audio_io, engine, models, paths, pipeline, pitch, system,
+                youtube)
 from ..dsp import audible_flags
 from ..player import Mixer, Player, Track
 from . import icons, theme
-from .widgets import (COLUMN_GAP, HEADER_WIDTH, ROW_SPACING, ChipButton, DropZone, Lcd, LogoTile, ModeTile,
-                      PlayButton, TimeRuler, ToggleSwitch, TrackRow, TracksPanel, Viewport, glow, icon_button,
-                      label, repolish, text_button)
+from .home import HomePage
+from .widgets import (COLUMN_GAP, HEADER_WIDTH, ROW_SPACING, ChipButton, DropZone, Lcd, LogoTile, PlayButton,
+                      TimeRuler, ToggleSwitch, TrackRow, TracksPanel, Viewport, glow, icon_button, label, repolish,
+                      text_button)
 from ..export import ExportJob, ExportOptions, ExportSource
-from .workers import ExportThread, KeyThread, LoadedAudio, LoadThread, SeparationThread
+from .workers import (ExportThread, KeyThread, LoadedAudio, LoadThread, PipelineThread, SeparationThread,
+                      YouTubeLoadThread, YouTubeUpdateThread)
 
 log = logging.getLogger(__name__)
 
-# (엔진, 모드) → (제목, 설명)
-MODE_INFO = {
-    ("demucs", "2"): ("보컬과 반주를 깔끔하게",
-                      "노래만 남기거나 빼고 싶을 때 가장 깔끔한 모드입니다. 반주는 '원본 − 보컬'로 만들어 "
-                      "악기 소리가 원본 그대로 남습니다."),
-    ("demucs", "4"): ("가장 안정적인 기본 분리",
-                      "Demucs가 가장 잘하는 분리입니다. 기타·피아노·신스 등은 '기타 악기' 트랙에 함께 들어갑니다."),
-    ("demucs", "6"): ("악기를 더 세밀하게",
-                      "보컬·드럼·베이스를 먼저 분리한 뒤 남은 소리에서 기타·피아노를 나눕니다. "
-                      "피아노가 약하게 나오면 위에서 '고급 (BS-RoFormer)' 엔진을 선택해 보세요."),
-    ("roformer", "2"): ("최신 모델로 보컬 분리",
-                        "BS-RoFormer로 보컬을 분리합니다. 반주는 '원본 − 보컬'로 만들어 악기 소리가 원본 그대로 남습니다."),
-    ("roformer", "4"): ("최신 모델로 4-Stem 분리",
-                        "BS-RoFormer로 보컬·드럼·베이스를 분리합니다. 나머지 악기는 '기타 악기'에 모입니다."),
-    ("roformer", "6"): ("피아노·기타까지 깔끔하게",
-                        "BS-RoFormer가 6개 악기를 한 번에 분리합니다. 피아노 분리 품질이 Demucs보다 크게 좋습니다."),
+MODE = "2"      # 보컬 담당 사용자용: 2-Stem(보컬 / 반주)만 사용
+
+ENGINE_INFO = {
+    "roformer": ("BS-RoFormer SW 로 보컬 분리",
+                 "보컬과 반주 품질이 가장 좋은 모델입니다 (MVSEP 기준 보컬 SDR 11.30dB, Demucs 8.33dB). "
+                 "반주는 '원본 − 보컬'로 만들어 악기 소리가 원본 그대로 남습니다."),
+    "demucs": ("Demucs 로 빠르게 보컬 분리",
+               "가볍고 빠른 모델입니다 (MVSEP 기준 보컬 SDR 8.33dB). CPU 만 있는 PC에서 시간을 줄이고 싶을 때 쓰세요. "
+               "반주는 '원본 − 보컬'로 만들어 악기 소리가 원본 그대로 남습니다."),
 }
 
 
@@ -56,37 +52,6 @@ class DeviceThread(QThread):
         except Exception as exc:
             log.exception("device detection failed")
             self.done.emit([system.DeviceInfo("cpu", f"CPU (장치 감지 실패: {exc})")])
-
-
-class ModeSelector(QWidget):
-    """2/4/6-Stem 타일 선택기."""
-
-    changed = Signal(str)
-
-    def __init__(self):
-        super().__init__()
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(10)
-        self.group = QButtonGroup(self)
-        self.buttons: dict[str, ModeTile] = {}
-        for key, title, desc in (("2", "2-Stem", "보컬 / 반주"), ("4", "4-Stem", "보컬 / 드럼 /\n베이스 / 기타"),
-                                 ("6", "6-Stem", "보컬 / 드럼 /\n베이스 / 기타 /\n피아노 / 나머지")):
-            t = ModeTile(title, desc)
-            self.group.addButton(t)
-            self.buttons[key] = t
-            t.clicked.connect(lambda _=False, k=key: self.changed.emit(k))
-            lay.addWidget(t)
-
-    def set_current(self, key: str):
-        if key in self.buttons:
-            self.buttons[key].setChecked(True)
-
-    def current(self) -> str:
-        for k, b in self.buttons.items():
-            if b.isChecked():
-                return k
-        return "4"
 
 
 def card(number: str, title: str, caps: str) -> tuple[QFrame, QVBoxLayout]:
@@ -115,11 +80,11 @@ class SettingsDialog(QDialog):
         super().__init__(win)
         self.win = win
         self.setWindowTitle("설정")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(560)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(22, 20, 22, 18)
-        lay.setSpacing(12)
-        lay.addWidget(label("저장 폴더", "sectionLabel"))
+        lay.setSpacing(10)
+        lay.addWidget(label("저장 위치", "sectionLabel"))
         row = QHBoxLayout()
         self.path_lbl = label(str(win.output_dir), "dim", wrap=True)
         self.path_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -128,16 +93,28 @@ class SettingsDialog(QDialog):
         row.addWidget(self.path_lbl, 1)
         row.addWidget(change)
         lay.addLayout(row)
-        lay.addWidget(label("곡마다 하위 폴더가 만들어지고, 그 안에 트랙 파일이 저장됩니다.", "faint", wrap=True))
+        lay.addWidget(label("곡마다 하위 폴더가 만들어지고, 그 안에 결과 파일이 저장됩니다.", "faint", wrap=True))
+        lay.addSpacing(6)
+        lay.addWidget(label("출력 형식", "sectionLabel"))
+        self.fmt = QComboBox()
+        for key, (lbl, _) in audio_io.EXPORT_FORMATS.items():
+            self.fmt.addItem(lbl, key)
+        self.fmt.setCurrentIndex(max(0, self.fmt.findData(win.fmt_combo.currentData())))
+        self.fmt.currentIndexChanged.connect(lambda *_: win.set_format(self.fmt.currentData()))
+        lay.addWidget(self.fmt)
+        lay.addWidget(label("WAV 24-bit(기본)·FLAC 은 무손실이라 추가 음질 손실이 없습니다. MP3 320kbps 는 마지막에 한 번만 "
+                            "인코딩합니다. 무손실 형식으로 저장해도 원본(예: YouTube·MP3)에 없던 음질이 생기지는 않습니다.",
+                            "faint", wrap=True))
         lay.addSpacing(6)
         lay.addWidget(label("음질", "sectionLabel"))
-        self.native_box = QCheckBox("원본 샘플레이트로 저장 (권장)")
+        self.native_box = QCheckBox("MR을 원본 샘플레이트로 저장 (권장)")
         self.native_box.setChecked(win.keep_native_rate)
         self.native_box.toggled.connect(win.set_keep_native_rate)
         lay.addWidget(self.native_box)
-        lay.addWidget(label("AI는 44.1kHz에서 처리하지만, 원본이 48kHz·96kHz면 원래 샘플레이트로 되돌려 저장합니다. "
-                            "MR의 남는 악기는 원본 그대로이고, 0dBFS를 넘는 파일은 자동으로 음량을 살짝 낮춰 "
-                            "잘림(클리핑)을 막습니다.", "faint", wrap=True))
+        lay.addWidget(label("AI 는 44.1kHz 에서 처리합니다. MR 은 원본(예: 48kHz)에서 보컬만 빼서 만들기 때문에 남는 악기는 "
+                            "리샘플링 없이 원본 그대로입니다. 보컬은 AI 출력 그대로 44.1kHz 로 저장합니다(업샘플링 안 함). "
+                            "0dBFS 를 넘는 경우에만 고정 배율로 음량을 살짝 낮추고, 리미터·EQ·노멀라이즈는 쓰지 않습니다.",
+                            "faint", wrap=True))
         lay.addSpacing(6)
         lay.addWidget(label("AI 모델", "sectionLabel"))
         mrow = QHBoxLayout()
@@ -149,6 +126,17 @@ class SettingsDialog(QDialog):
         b2.clicked.connect(win.import_models)
         mrow.addWidget(b2)
         lay.addLayout(mrow)
+        lay.addSpacing(6)
+        lay.addWidget(label("YouTube 기능", "sectionLabel"))
+        yrow = QHBoxLayout()
+        self.yt_lbl = label(f"yt-dlp {youtube.ytdlp_version()} · JavaScript 엔진: "
+                            f"{'Deno' if youtube.find_deno() else '없음'}", "dim", wrap=True)
+        yrow.addWidget(self.yt_lbl, 1)
+        ub = text_button("업데이트", "download", None, 36)
+        ub.setToolTip("YouTube 가 바뀌어 받기가 안 될 때 최신 다운로드 도구(yt-dlp)를 받습니다.")
+        ub.clicked.connect(win.update_youtube)
+        yrow.addWidget(ub)
+        lay.addLayout(yrow)
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         bb.rejected.connect(self.reject)
         lay.addWidget(bb)
@@ -163,7 +151,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.settings = settings or QSettings()
         self.setWindowTitle(APP_NAME)
-        self.setMinimumSize(1220, 760)
+        self.setMinimumSize(*self.HOME_MIN)
         self._initial_size()
         self.setAcceptDrops(True)
 
@@ -188,11 +176,22 @@ class MainWindow(QMainWindow):
         self.keep_native_rate = True
         self.last_error: Optional[str] = None
         self._seeking = False
+        self.pipeline_thread: Optional[PipelineThread] = None
+        self.yt_thread: Optional[YouTubeLoadThread] = None
+        self.yt_update_thread: Optional[YouTubeUpdateThread] = None
+        self.last_prep = None                  # 홈 작업: 마지막으로 디코딩한 입력 (재사용)
+        self.last_sep = None
+        self.last_sep_key = None
+        self.last_job = None                   # 마지막 홈 작업 결과 (pipeline.JobResult)
+        self.last_pipeline_error = None
+        self._job_preset_override: Optional[str] = None
+        self._job_t0 = 0.0
 
         self._build_ui()
         self._build_menu()
         self._restore_settings()
         self._set_state()
+        self.show_home()
 
         self.timer = QTimer(self)
         self.timer.setInterval(33)
@@ -221,7 +220,29 @@ class MainWindow(QMainWindow):
         self.resize(min(1536, int(g.width() * 0.94)), min(1000, int(g.height() * 0.92)))
 
     # ================================================================ UI ===
+    HOME_MIN = (440, 640)
+    ADV_MIN = (1220, 760)
+
     def _build_ui(self):
+        self.pages = QStackedWidget()
+        self.home = HomePage()
+        self.pages.addWidget(self.home)
+        self.pages.addWidget(self._build_advanced())
+        self.setCentralWidget(self.pages)
+        self._wire_home()
+
+    def show_home(self):
+        self.pages.setCurrentIndex(0)
+        self.setMinimumSize(*self.HOME_MIN)
+        self._update_home_footer()
+
+    def show_advanced(self):
+        self.setMinimumSize(*self.ADV_MIN)
+        if self.width() < self.ADV_MIN[0] or self.height() < self.ADV_MIN[1]:
+            self.resize(max(self.width(), self.ADV_MIN[0]), max(self.height(), self.ADV_MIN[1]))
+        self.pages.setCurrentIndex(1)
+
+    def _build_advanced(self) -> QWidget:
         root = QWidget()
         root.setObjectName("Root")
         rl = QVBoxLayout(root)
@@ -243,7 +264,7 @@ class MainWindow(QMainWindow):
         right.addWidget(self._build_bottom_bar())
         body.addLayout(right, 1)
         rl.addLayout(body, 1)
-        self.setCentralWidget(root)
+        return root
 
     def _build_header(self) -> QWidget:
         bar = QWidget()
@@ -252,6 +273,10 @@ class MainWindow(QMainWindow):
         lay = QHBoxLayout(bar)
         lay.setContentsMargins(20, 14, 20, 14)
         lay.setSpacing(10)
+        self.home_btn = text_button("홈", "chevron-left", None, 46, theme.TEXT_DIM)
+        self.home_btn.setToolTip("홈 화면으로 (원클릭 추출)")
+        self.home_btn.clicked.connect(self.show_home)
+        lay.addWidget(self.home_btn)
         lay.addWidget(LogoTile())
         tcol = QVBoxLayout()
         tcol.setSpacing(3)
@@ -323,6 +348,10 @@ class MainWindow(QMainWindow):
         self.open_btn.setMinimumWidth(124)
         self.open_btn.clicked.connect(self.browse_file)
         lay.addWidget(self.open_btn)
+        self.yt_btn = text_button("YouTube", "link", None, 46, theme.TEXT_DIM)
+        self.yt_btn.setToolTip("YouTube 영상 주소로 오디오 불러오기")
+        self.yt_btn.clicked.connect(self.open_youtube)
+        lay.addWidget(self.yt_btn)
         self.more_btn = icon_button("dots", "메뉴", 46, 20)
         lay.addWidget(self.more_btn)
         return bar
@@ -341,11 +370,7 @@ class MainWindow(QMainWindow):
         lay.setSpacing(16)
 
         # ---- 1. 분리 ----
-        c, cl = card("1", "AI 음원 분리", "AI MUSIC SEPARATION")
-        self.mode_ctl = ModeSelector()
-        self.mode_ctl.changed.connect(self._on_mode)
-        cl.addWidget(self.mode_ctl)
-
+        c, cl = card("1", "AI 음원 분리 · 2-Stem", "VOCALS / INSTRUMENTAL")
         info = QFrame()
         info.setObjectName("InfoBox")
         il = QVBoxLayout(info)
@@ -354,7 +379,7 @@ class MainWindow(QMainWindow):
         ih = QHBoxLayout()
         ih.setSpacing(8)
         spark = QLabel()
-        spark.setPixmap(icons.pixmap("sparkles", "#f5b400", 18))
+        spark.setPixmap(icons.pixmap("sparkles", "#e0a800", 18))
         self.info_title = label("", "sectionLabel", wrap=True)
         ih.addWidget(spark)
         ih.addWidget(self.info_title, 1)
@@ -363,29 +388,39 @@ class MainWindow(QMainWindow):
         il.addWidget(self.info_text)
         cl.addWidget(info)
 
-        cl.addWidget(label("AI 엔진", "sectionLabel"))
+        cl.addWidget(label("처리 방식", "sectionLabel"))
+        seg = QHBoxLayout()
+        seg.setSpacing(8)
+        self.preset_group = QButtonGroup(self)
+        self.preset_btns: dict[str, QPushButton] = {}
+        for key in ("speed", "quality", "best"):
+            pr = engine.PRESETS[key]
+            b = QPushButton(pr.title)
+            b.setProperty("kind", "seg")
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setToolTip(pr.description)
+            b.setFixedHeight(38)
+            self.preset_group.addButton(b)
+            self.preset_btns[key] = b
+            b.clicked.connect(lambda _=False, k=key: self._on_preset(k))
+            seg.addWidget(b)
+        cl.addLayout(seg)
+        self.preset_hint = label("", "faint", wrap=True)
+        cl.addWidget(self.preset_hint)
+
+        cl.addWidget(label("AI 모델", "sectionLabel"))
         self.engine_combo = QComboBox()
         for key, eng in engine.ENGINES.items():
-            self.engine_combo.addItem(icons.icon("sparkles" if key == "roformer" else "layers", theme.TEXT_DIM, 18),
+            self.engine_combo.addItem(icons.icon("sparkles" if key != "demucs" else "layers", theme.TEXT_DIM, 18),
                                       eng.title, key)
         self.engine_combo.setIconSize(QSize(18, 18))
-        self.engine_combo.currentIndexChanged.connect(lambda *_: self._on_mode(self.mode_ctl.current()))
+        self.engine_combo.currentIndexChanged.connect(lambda *_: self._on_mode(MODE))
         cl.addWidget(self.engine_combo)
         self.engine_hint = label("", "dim", wrap=True)
         cl.addWidget(self.engine_hint)
-
-        hq = QHBoxLayout()
-        hq.setSpacing(12)
-        self.hq_box = ToggleSwitch()
-        self.hq_box.toggled.connect(self._on_mode_options)
-        hcol = QVBoxLayout()
-        hcol.setSpacing(2)
-        hcol.addWidget(label("고품질 모드 (처리 시간 증가)", "sectionLabel"))
-        self.hq_hint = label("", "dim", wrap=True)
-        hcol.addWidget(self.hq_hint)
-        hq.addWidget(self.hq_box, 0, Qt.AlignmentFlag.AlignTop)
-        hq.addLayout(hcol, 1)
-        cl.addLayout(hq)
+        self.model_hint = label("", "faint", wrap=True)
+        cl.addWidget(self.model_hint)
 
         cl.addWidget(label("처리 장치", "sectionLabel"))
         self.device_combo = QComboBox()
@@ -401,7 +436,7 @@ class MainWindow(QMainWindow):
 
         self.start_btn = text_button("AI 분리 시작", "sparkles", "primary", 48)
         self.start_btn.clicked.connect(self.start_separation)
-        glow(self.start_btn, theme.ACCENT, 20, 70, 3)
+        glow(self.start_btn, theme.ACCENT, 20, 60, 3)
         cl.addWidget(self.start_btn)
         self.progress = QProgressBar()
         self.progress.setRange(0, 1000)
@@ -425,31 +460,44 @@ class MainWindow(QMainWindow):
         cl.addWidget(self.notice_lbl)
         lay.addWidget(c)
 
-        # ---- 2. MR ----
-        c, cl = card("2", "MR(반주) 만들기", "MR MAKER")
-        cl.addWidget(label("빼고 싶은 악기를 누르세요. 원본에서 그 악기만 빼서 반주를 만들기 때문에 "
-                           "남는 악기는 원본 음질 그대로입니다.", "dim", wrap=True))
-        self.chip_box = QWidget()
+        # ---- 2. MR / 보컬 저장 ----
+        c, cl = card("2", "MR(반주) · 보컬 저장", "EXPORT")
+        cl.addWidget(label("MR 은 원본에서 보컬만 빼서 만들기 때문에 남는 악기는 원본 음질 그대로입니다. "
+                           "저장 형식과 위치는 아래 막대와 [설정]에서 바꿉니다.", "dim", wrap=True))
+        grow = QHBoxLayout()
+        grow.setSpacing(10)
+        self.guide_box = QCheckBox("가이드 보컬 작게 남기기")
+        self.guide_box.setToolTip("MR 에 원래 보컬을 작게 섞어 저장합니다 (연습용 가이드).")
+        self.guide_box.toggled.connect(self._on_guide)
+        self.guide_slider = QSlider(Qt.Orientation.Horizontal)
+        self.guide_slider.setRange(5, 50)
+        self.guide_slider.setValue(20)
+        self.guide_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.guide_slider.valueChanged.connect(self._on_guide)
+        self.guide_lbl = label("20%", "dim")
+        self.guide_lbl.setFixedWidth(40)
+        grow.addWidget(self.guide_box)
+        grow.addWidget(self.guide_slider, 1)
+        grow.addWidget(self.guide_lbl)
+        cl.addLayout(grow)
+        self.chip_box = QWidget()          # (이전 버전 호환: 2-Stem 에서는 악기 칩을 쓰지 않음)
         self.chip_grid = QGridLayout(self.chip_box)
-        self.chip_grid.setContentsMargins(0, 0, 0, 0)
-        self.chip_grid.setHorizontalSpacing(8)
-        self.chip_grid.setVerticalSpacing(8)
-        cl.addWidget(self.chip_box)
-        self.chip_empty = label("분리를 마치면 여기에 악기 버튼이 나타납니다.", "faint", wrap=True)
+        self.chip_box.hide()
+        self.chip_empty = label("분리를 마치면 저장할 수 있습니다.", "faint", wrap=True)
         cl.addWidget(self.chip_empty)
-        self.mr_volume_box = QCheckBox("트랙 볼륨 설정 반영")
-        self.mr_volume_box.setToolTip("체크하면 각 트랙의 볼륨 슬라이더 값이 MR에 적용됩니다.")
-        cl.addWidget(self.mr_volume_box)
         mr = QHBoxLayout()
         mr.setSpacing(10)
-        self.mr_preview_btn = text_button("미리 듣기", "play", None, 46)
+        self.mr_preview_btn = text_button("MR 미리 듣기", "play", None, 46)
         self.mr_preview_btn.clicked.connect(self.preview_mr)
         self.mr_save_btn = text_button("MR 저장", "music", "primary", 46)
         self.mr_save_btn.clicked.connect(self.export_mr)
-        glow(self.mr_save_btn, theme.ACCENT, 20, 70, 3)
-        mr.addWidget(self.mr_preview_btn, 2)
-        mr.addWidget(self.mr_save_btn, 3)
+        glow(self.mr_save_btn, theme.ACCENT, 20, 60, 3)
+        mr.addWidget(self.mr_preview_btn, 1)
+        mr.addWidget(self.mr_save_btn, 1)
         cl.addLayout(mr)
+        self.vocal_save_btn = text_button("보컬만 저장", "mic", None, 42, theme.TEXT_DIM)
+        self.vocal_save_btn.clicked.connect(self.export_vocals)
+        cl.addWidget(self.vocal_save_btn)
         lay.addWidget(c)
 
         # ---- 3. 키 조절 ----
@@ -490,13 +538,13 @@ class MainWindow(QMainWindow):
         ends.addStretch(1)
         ends.addWidget(label("+12 (한 옥타브 ↑)", "faint"))
         cl.addLayout(ends)
-        self.keep_drums_box = QCheckBox("드럼은 원래 음높이 유지")
-        self.keep_drums_box.setToolTip("드럼처럼 음정이 없는 소리는 그대로 두면 더 자연스럽습니다.\n"
-                                       "(분리 후에 적용됩니다)")
-        self.keep_drums_box.toggled.connect(self._on_keep_drums)
-        cl.addWidget(self.keep_drums_box)
-        self.key_hint = label("템포는 그대로, 음높이만 바뀝니다. 재생과 저장(MR·트랙)에 모두 적용됩니다.", "faint",
-                              wrap=True)
+        self.formant_box = QCheckBox("보컬 음색(포먼트) 유지")
+        self.formant_box.setToolTip("키를 바꿀 때 보컬 목소리가 가늘어지거나 굵어지지 않도록 음색을 유지합니다.\n"
+                                    "보컬 트랙·보컬 결과물에만 적용되고 MR 에는 적용하지 않습니다.")
+        self.formant_box.toggled.connect(self._on_formant)
+        cl.addWidget(self.formant_box)
+        self.key_hint = label("템포와 곡 길이는 그대로, 음높이만 바뀝니다. 0 이면 키 변경 처리를 하지 않습니다. "
+                              "재생과 저장에 모두 적용됩니다.", "faint", wrap=True)
         cl.addWidget(self.key_hint)
         self.key_timer = QTimer(self)
         self.key_timer.setSingleShot(True)
@@ -622,7 +670,9 @@ class MainWindow(QMainWindow):
     def _build_menu(self):
         menu = QMenu(self)
         acts = [
+            ("홈 화면", self.show_home, None),
             ("파일 열기…", self.browse_file, QKeySequence.StandardKey.Open),
+            ("YouTube에서 불러오기…", self.open_youtube, None),
             ("저장 폴더 변경…", self.choose_output_dir, None),
             None,
             ("모든 음소거·솔로 해제", self.reset_mixer, None),
@@ -631,6 +681,7 @@ class MainWindow(QMainWindow):
             ("사용 방법", self.show_help, QKeySequence.StandardKey.HelpContents),
             ("AI 모델 폴더 열기", lambda: paths.open_in_file_manager(paths.user_models_dir()), None),
             ("AI 모델 가져오기 (오프라인 설치)…", self.import_models, None),
+            ("YouTube 기능 업데이트", self.update_youtube, None),
             ("로그 폴더 열기", lambda: paths.open_in_file_manager(paths.logs_dir()), None),
             None,
             (f"{APP_NAME} 정보", self.show_about, None),
@@ -666,47 +717,72 @@ class MainWindow(QMainWindow):
     def _restore_settings(self):
         s = self.settings
         self.output_dir = Path(s.value("out_dir", str(paths.default_output_dir())))
-        self.mode_ctl.set_current(str(s.value("mode", "4")))
-        self.hq_box.setChecked(s.value("hq", False, type=bool))
+        preset = str(s.value("preset", engine.DEFAULT_PRESET))
+        self.preset_btns.get(preset, self.preset_btns[engine.DEFAULT_PRESET]).setChecked(True)
         idx = self.device_combo.findData(s.value("device", "auto"))
         self.device_combo.setCurrentIndex(max(0, idx))
         idx = self.fmt_combo.findData(s.value("fmt", audio_io.DEFAULT_FORMAT))
         self.fmt_combo.setCurrentIndex(max(0, idx))
-        self.mr_volume_box.setChecked(s.value("mr_volume", True, type=bool))
-        idx = self.engine_combo.findData(s.value("engine", "demucs"))
+        idx = self.engine_combo.findData(s.value("engine2", "auto"))     # v1.2 부터 기본 '자동'
         self.engine_combo.blockSignals(True)
         self.engine_combo.setCurrentIndex(max(0, idx))
         self.engine_combo.blockSignals(False)
         self.keep_native_rate = s.value("keep_native", True, type=bool)
-        self.keep_drums_box.blockSignals(True)
-        self.keep_drums_box.setChecked(s.value("keep_drums", True, type=bool))
-        self.keep_drums_box.blockSignals(False)
-        self._on_mode(self.mode_ctl.current(), save=False)
+        self.formant_box.blockSignals(True)
+        self.formant_box.setChecked(s.value("formant", True, type=bool))
+        self.formant_box.blockSignals(False)
+        self.guide_box.blockSignals(True)
+        self.guide_box.setChecked(s.value("guide", False, type=bool))
+        self.guide_box.blockSignals(False)
+        self.guide_slider.setValue(int(s.value("guide_level", 20)))
+        self.home.set_target(str(s.value("target", "mr")))
+        self._on_guide()
+        self._on_mode(MODE, save=False)
+        self._update_home_footer()
 
     def _save_settings(self):
         s = self.settings
         s.setValue("out_dir", str(self.output_dir))
-        s.setValue("mode", self.mode_ctl.current())
-        s.setValue("hq", self.hq_box.isChecked())
+        s.setValue("preset", self.preset_key())
         s.setValue("device", self.device_combo.currentData())
         s.setValue("fmt", self.fmt_combo.currentData())
-        s.setValue("mr_volume", self.mr_volume_box.isChecked())
-        s.setValue("engine", self.engine_key())
+        s.setValue("engine2", self.engine_key())
         s.setValue("keep_native", self.keep_native_rate)
-        s.setValue("keep_drums", self.keep_drums_box.isChecked())
+        s.setValue("formant", self.formant_box.isChecked())
+        s.setValue("guide", self.guide_box.isChecked())
+        s.setValue("guide_level", self.guide_slider.value())
+        s.setValue("target", self.home.target())
         s.sync()
 
     def engine_key(self) -> str:
-        return self.engine_combo.currentData() or "demucs"
+        return self.engine_combo.currentData() or "auto"
+
+    def preset_key(self) -> str:
+        for k, b in self.preset_btns.items():
+            if b.isChecked():
+                return k
+        return engine.DEFAULT_PRESET
+
+    def resolved_engine(self, preset: Optional[str] = None) -> str:
+        return engine.resolve_engine(self.engine_key(), preset or self.preset_key(),
+                                     os.environ.get("MUSIC_SEPARATOR_FORCE_MODEL") or None)
 
     def set_keep_native_rate(self, v: bool):
         self.keep_native_rate = bool(v)
         self._save_settings()
 
+    def set_format(self, fmt: str):
+        idx = self.fmt_combo.findData(fmt)
+        if idx >= 0:
+            self.fmt_combo.setCurrentIndex(idx)
+        self._save_settings()
+        self._update_home_footer()
+
     # ============================================================ state ===
     def busy(self) -> bool:
         # 스레드 참조는 finished 처리(완료 시그널 처리 이후)에서 해제되므로 참조 존재 여부로 판단
-        return any(t is not None for t in (self.load_thread, self.sep_thread, self.export_thread))
+        return any(t is not None for t in (self.load_thread, self.sep_thread, self.export_thread,
+                                            self.pipeline_thread, self.yt_thread))
 
     def _thread_finished(self, attr: str):
         t = getattr(self, attr)
@@ -719,52 +795,46 @@ class MainWindow(QMainWindow):
         has_file = self.loaded is not None
         has_result = self.result is not None
         self.open_btn.setEnabled(not busy)
+        self.yt_btn.setEnabled(not busy)
         self.start_btn.setEnabled(has_file and not busy)
-        for b in self.mode_ctl.buttons.values():
+        for b in self.preset_btns.values():
             b.setEnabled(not busy)
-        self.hq_box.setEnabled(not busy)
         self.device_combo.setEnabled(not busy)
         self.engine_combo.setEnabled(not busy)
-        for w in (self.mr_preview_btn, self.mr_save_btn, self.export_sel_btn, self.export_all_btn):
+        for w in (self.mr_preview_btn, self.mr_save_btn, self.vocal_save_btn, self.export_sel_btn,
+                  self.export_all_btn):
             w.setEnabled(has_result and not busy)
         for w in (self.play_btn, self.stop_btn, self.rew_btn, self.seek):
             w.setEnabled(has_file)
         self.chip_empty.setVisible(not has_result)
         self.start_btn.setText("다시 분리" if has_result else "AI 분리 시작")
+        self.home_btn.setEnabled(True)
 
-    def _on_mode(self, key: str, save: bool = True):
-        self.mode_ctl.set_current(key)
-        eng = self.engine_key()
-        title, text = MODE_INFO[(eng, key)]
+    def _on_preset(self, key: str):
+        self.preset_btns[key].setChecked(True)
+        self._on_mode(MODE)
+
+    def _on_mode(self, key: str = MODE, save: bool = True):
+        eng = self.resolved_engine()
+        title, text = ENGINE_INFO[eng]
         self.info_title.setText(title)
         self.info_text.setText(text)
-        e = engine.ENGINES[eng]
+        e = engine.ENGINES[self.engine_key()]
         self.engine_hint.setText(e.note)
-        self.engine_hint.setProperty("role", "warn" if eng == "roformer" else "dim")
+        self.engine_hint.setProperty("role", "warn" if self.engine_key() == "roformer" else "dim")
         repolish(self.engine_hint)
+        self.preset_hint.setText(engine.PRESETS[self.preset_key()].description)
         self._on_mode_options()
         self._update_device_hint()
         if save:
             self._save_settings()
 
     def _on_mode_options(self, *_):
-        key = self.mode_ctl.current()
-        hq = self.hq_box.isChecked()
-        eng = self.engine_key()
-        names = engine.required_models(eng, key, hq)
-        if eng == "roformer":
-            tip = "고품질: 구간을 4번 겹쳐 처리해 경계 잡음을 줄임 (처리 시간 약 2배)"
-        elif key == "6":
-            tip = ("고품질: 미세조정 모델 4개(htdemucs_ft)로 보컬·드럼·베이스를 분리하고, "
-                   "기타·피아노는 2회 처리해 평균 (처리 시간 크게 증가)")
-        else:
-            tip = "고품질: 미세조정 모델 4개(htdemucs_ft) 사용 + 구간 겹침 증가 (처리 시간 약 4~8배)"
-        self.hq_box.setToolTip(tip)
+        names = engine.required_models(self.engine_key(), MODE, self.preset_key(),
+                                       os.environ.get("MUSIC_SEPARATOR_FORCE_MODEL") or None)
         missing = sum(models.missing_download_mb(n) for n in names)
         status = "설치됨" if not missing else f"첫 사용 시 약 {missing}MB 다운로드"
-        self.hq_hint.setText(f"AI 모델 ({' + '.join(names)}) · {status}")
-        self.hq_hint.setToolTip(tip)
-        self.settings.setValue("hq", hq)
+        self.model_hint.setText(f"사용 모델: {' + '.join(names)} · {status}")
 
     def _on_device_pref(self, *_):
         self._update_device_hint()
@@ -789,8 +859,9 @@ class MainWindow(QMainWindow):
         cpu = self.devices[-1]
         if pref == "cpu" or not gpus:
             msg = f"{cpu.label}로 처리합니다." + ("" if gpus else " (사용 가능한 GPU 없음)")
-            if self.engine_key() == "roformer":
-                msg += "\n고급 엔진은 CPU에서 매우 느립니다 (곡 길이의 수 배~10배 이상)."
+            if self.resolved_engine() == "roformer":
+                msg += ("\nBS-RoFormer 는 CPU 에서 곡 길이의 수 배~10배 이상 걸립니다. 빨리 받고 싶으면 "
+                        "'속도 우선'을 선택하세요.")
         else:
             msg = f"GPU 가속 사용: {gpus[0].label}\n문제가 생기면 자동으로 CPU로 다시 처리합니다."
         self.device_hint.setText(msg)
@@ -906,15 +977,13 @@ class MainWindow(QMainWindow):
     def start_separation(self):
         if self.loaded is None or self.busy():
             return
-        mode = self.mode_ctl.current()
-        hq = self.hq_box.isChecked()
+        preset = self.preset_key()
         eng = self.engine_key()
         model_name = os.environ.get("MUSIC_SEPARATOR_FORCE_MODEL") or None
-        if model_name and model_name.startswith("roformer"):
-            eng = "roformer"
+        resolved = engine.resolve_engine(eng, preset, model_name)
         interactive = not os.environ.get("MUSIC_SEPARATOR_NONINTERACTIVE")
 
-        need = [n for n in engine.required_models(eng, mode, hq, model_name) if models.missing_download_mb(n)]
+        need = [n for n in engine.required_models(eng, MODE, preset, model_name) if models.missing_download_mb(n)]
         if need:
             mb = sum(models.missing_download_mb(n) for n in need)
             free = system.free_disk(paths.user_models_dir())
@@ -925,8 +994,8 @@ class MainWindow(QMainWindow):
             if interactive:
                 extra = ""
                 if "bs_roformer_sw" in need:
-                    extra = ("\n\n고급 엔진(BS-RoFormer SW)은 커뮤니티에서 학습해 공개한 모델로, "
-                             "모델 파일의 사용 조건이 명시되어 있지 않습니다. 개인 용도로 사용해 주세요.")
+                    extra = ("\n\nBS-RoFormer SW 는 커뮤니티에서 학습해 공개한 모델로, 모델 파일의 사용 조건이 "
+                             "명시되어 있지 않습니다. 개인 용도로 사용해 주세요.")
                 r = QMessageBox.question(
                     self, "AI 모델 다운로드",
                     f"이 설정에는 AI 모델 {', '.join(need)} (약 {mb}MB)이 필요합니다.\n"
@@ -934,31 +1003,21 @@ class MainWindow(QMainWindow):
                     "\n\n지금 다운로드할까요?")
                 if r != QMessageBox.StandardButton.Yes:
                     return
-        if eng == "roformer" and interactive and self._resolve_device() == "cpu" and \
+        if resolved == "roformer" and interactive and self._resolve_device() == "cpu" and \
                 not self.settings.value("warned_roformer_cpu", False, type=bool):
             r = QMessageBox.question(
-                self, "고급 엔진 안내",
-                "GPU가 없어 CPU로 처리합니다. 고급 엔진은 계산량이 많아 CPU에서는 곡 길이의 수 배~10배 이상 "
-                "걸릴 수 있습니다 (예: 4분 곡 → 20분 이상).\n\n계속할까요?")
+                self, "처리 시간 안내",
+                "GPU가 없어 CPU로 처리합니다. BS-RoFormer 는 계산량이 많아 CPU에서는 곡 길이의 수 배~10배 이상 "
+                "걸릴 수 있습니다 (예: 4분 곡 → 15~40분).\n\n빨리 받으려면 '속도 우선'을 선택하세요. 계속할까요?")
             if r != QMessageBox.StandardButton.Yes:
                 return
             self.settings.setValue("warned_roformer_cpu", True)
-        if mode == "6" and eng == "demucs" and interactive and \
-                not self.settings.value("warned_6s_v2", False, type=bool):
-            QMessageBox.information(
-                self, "6-Stem 안내",
-                "표준 엔진의 6-Stem은 보컬·드럼·베이스를 먼저 고품질로 분리한 뒤, 남은 소리에서 "
-                "기타·피아노를 나눕니다.\n\n"
-                "• 기타: 비교적 잘 분리됩니다.\n"
-                "• 피아노: 소리가 작게 나오거나 '나머지 악기'로 새는 경우가 있습니다.\n\n"
-                "피아노가 중요하다면 'AI 엔진'에서 '고급 (BS-RoFormer)'을 선택해 보세요.")
-            self.settings.setValue("warned_6s_v2", True)
 
-        m = engine.MODES[mode]
-        n_src = 6 if mode == "6" else 4
-        main = engine.plan_models(eng, mode, hq, model_name).get("main", "")
+        m = engine.MODES[MODE]
+        main = engine.plan_models(eng, MODE, preset, model_name).get("main", "")
         bag = len(models.MODELS[main].sigs) if main in models.MODELS else 1
-        req = system.separation_requirement(self.loaded.n_samples, n_src, len(m.outputs), self.session_dir, bag)
+        req = system.separation_requirement(self.loaded.n_samples, 6 if resolved == "roformer" else 4,
+                                            len(m.outputs), self.session_dir, bag)
         if not req.disk_ok:
             self._error("디스크 공간이 부족하여 분리할 수 없습니다.\n"
                         f"필요: {system.human_bytes(req.disk_needed)}, 남은 공간: "
@@ -980,7 +1039,7 @@ class MainWindow(QMainWindow):
         out_dir = self.session_dir / f"run{self.run_counter}"
         device = self._resolve_device()
         self.notice_lbl.hide()
-        self.sep_thread = SeparationThread(self.loaded.mix_path, mode, hq, device, out_dir, model_name, eng, self)
+        self.sep_thread = SeparationThread(self.loaded.mix_path, MODE, preset, device, out_dir, model_name, eng, self)
         self.sep_thread.progress.connect(self._on_progress)
         self.sep_thread.notice.connect(self._on_notice)
         self.sep_thread.done.connect(self._on_separated)
@@ -991,8 +1050,8 @@ class MainWindow(QMainWindow):
         self._on_progress(0.0, "준비 중…")
         self.sep_thread.start()
         self._set_state()
-        self.set_status(f"{m.title} 분리 중 ({engine.ENGINES[eng].short})… 처리 중에도 프로그램을 계속 "
-                        "사용할 수 있습니다.", "busy")
+        self.set_status(f"2-Stem 분리 중 ({engine.ENGINES[resolved].short}, {engine.PRESETS[preset].title})… "
+                        "처리 중에도 프로그램을 계속 사용할 수 있습니다.", "busy")
 
     def _show_progress(self, on: bool, cancellable: bool = True):
         self.progress.setVisible(on)
@@ -1011,7 +1070,7 @@ class MainWindow(QMainWindow):
         self.notice_lbl.show()
 
     def cancel_work(self):
-        for t in (self.sep_thread, self.export_thread):
+        for t in (self.sep_thread, self.export_thread, self.yt_thread):
             if t is not None and t.isRunning() and hasattr(t, "cancel"):
                 t.cancel()
         self.cancel_btn.setEnabled(False)
@@ -1034,7 +1093,7 @@ class MainWindow(QMainWindow):
         self._reset_tracks(clear_original=False)
         run_dir = res.stems[0].path.parent.name if res.stems else ""
         self._invalidate_key_cache()
-        self._purge_cache(keep=self._source_files() | {run_dir})
+        self._purge_cache(keep=self._source_files() | {run_dir} | self._top_dirs([s.path for s in res.stems]))
         self.result = res
         tracks = [t for t in self.mixer.tracks if t.key == "original"]
         if tracks:
@@ -1053,6 +1112,9 @@ class MainWindow(QMainWindow):
         dev = {"cuda": "NVIDIA GPU", "mps": "Apple GPU", "cpu": "CPU"}.get(res.device, res.device)
         self.set_status(f"{engine.MODES[res.mode].title} 분리 완료 · {engine.ENGINES[res.engine].short} · {dev} · "
                         f"{audio_io.format_time(res.elapsed)} 소요 — ▶ 재생해서 들어 보세요.")
+        if self.loaded is not None and res.mode == MODE:    # 홈 화면 작업에서도 재사용
+            self.last_sep = res
+            self.last_sep_key = pipeline.separation_key(self.loaded.source_id, res.model, res.preset)
         self._set_state()
         if self.key_target != 0:
             self._apply_key()
@@ -1060,10 +1122,19 @@ class MainWindow(QMainWindow):
     def _source_files(self) -> set:
         if not self.loaded:
             return set()
-        names = {self.loaded.mix_path.name}
-        if self.loaded.native_path:
-            names.add(Path(self.loaded.native_path).name)
-        return names
+        return self._top_dirs([self.loaded.mix_path, self.loaded.native_path])
+
+    def _top_dirs(self, files) -> set:
+        """세션 폴더 바로 아래에서 이 파일들을 담고 있는 항목 이름 (정리할 때 지우지 않을 것)."""
+        out = set()
+        for f in files:
+            if not f:
+                continue
+            try:
+                out.add(Path(f).resolve().relative_to(self.session_dir.resolve()).parts[0])
+            except (ValueError, IndexError):
+                pass
+        return out
 
     # ============================================================ tracks ===
     def _add_row(self, key, name, sub, color, peaks, reference=False):
@@ -1182,62 +1253,69 @@ class MainWindow(QMainWindow):
 
     # ============================================================== MR ===
     def _build_chips(self, res: Optional[engine.SeparationResult]):
-        from .icons import STEM_ICON
-
+        """2-Stem 에서는 악기 칩 대신 [MR 저장]/[보컬만 저장] 버튼을 사용."""
         for b in self.chips.values():
             b.setParent(None)
             b.deleteLater()
         self.chips.clear()
-        if res is None:
-            return
-        cols = 2 if len(res.stems) <= 4 else 3
-        for i, stem in enumerate(res.stems):
-            b = ChipButton(f"{engine.stem_label(stem.key, res.mode)} 제거", STEM_ICON.get(stem.key, "wave"))
-            b.setToolTip("누르면 MR에서 빠집니다 (빨간색 = 제외)")
-            b.setChecked(stem.key == "vocals")
-            b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            self.chip_grid.addWidget(b, i // cols, i % cols)
-            self.chips[stem.key] = b
 
-    def _mr_selection(self) -> tuple[list[str], list[str]]:
-        excluded = [k for k, b in self.chips.items() if b.isChecked()]
-        return [k for k in self.chips if k not in excluded], excluded
+    def _on_guide(self, *_):
+        on = self.guide_box.isChecked()
+        self.guide_slider.setEnabled(on)
+        self.guide_lbl.setText(f"{self.guide_slider.value()}%")
+        self.guide_lbl.setEnabled(on)
+        self.mr_save_btn.setText("MR 저장 (가이드 보컬 포함)" if on else "MR 저장")
+        self.settings.setValue("guide", on)
+        self.settings.setValue("guide_level", self.guide_slider.value())
+
+    def _guide_gain(self) -> float:
+        return self.guide_slider.value() / 100.0 if self.guide_box.isChecked() else 0.0
 
     def preview_mr(self):
-        included, excluded = self._mr_selection()
+        g = self._guide_gain()
         for key, row in self.rows.items():
             row.set_solo(False)
-            row.set_muted(key == "original" or key in excluded)
+            if key == "vocals":
+                row.set_muted(g == 0)
+                if g:
+                    row.slider.setValue(int(round(g * 100)))
+            else:
+                row.set_muted(key == "original")
         self._refresh_audible()
         if not self.player.playing:
             self.toggle_play()
-        self.set_status("MR 미리 듣기: " + (", ".join(self._label(k) for k in excluded) or "없음") + " 제외")
+        self.set_status("MR 미리 듣기" + (f" (가이드 보컬 {int(g * 100)}%)" if g else " (보컬 제거)"))
 
     def export_mr(self):
         if self.result is None:
             return
-        included, excluded = self._mr_selection()
-        if not included:
-            self._error("MR에 포함할 트랙이 없습니다. 제외할 악기를 줄여 주세요.")
-            return
-        use_vol = self.mr_volume_box.isChecked()
-        gains = {k: (self.rows[k].gain if use_vol else 1.0) for k in included}
+        g = self._guide_gain()
         fmt = self.fmt_combo.currentData()
         ext = audio_io.EXPORT_FORMATS[fmt][1]
-        suffix = ("MR (" + ", ".join(self._label(k) for k in excluded) + " 제외)") if excluded else "전체 믹스"
+        if g:
+            suffix = f"MR (가이드 보컬 {int(round(g * 100))}%)"
+            job = ExportJob(Path(), fmt, suffix, "mr", excluded=[], gains={"vocals": g})
+        else:
+            suffix = "MR (보컬 제거)"
+            job = ExportJob(Path(), fmt, suffix, "mr", excluded=["vocals"], gains={})
         name = f"{self._song()} - {suffix}{self._key_suffix()}{ext}"
-        path = audio_io.unique_path(self._song_dir() / audio_io.safe_filename(name))
-        self._run_export([ExportJob(path, fmt, suffix, "mr", excluded=excluded, gains=gains)])
+        job.path = audio_io.unique_path(self._song_dir() / audio_io.safe_filename(name))
+        self._run_export([job])
+
+    def export_vocals(self):
+        if self.result is None:
+            return
+        self._run_export(self._stem_jobs(["vocals"]))
 
     # ========================================================== export ===
     def _song(self) -> str:
-        return audio_io.safe_filename(self.loaded.source.stem if self.loaded else "track", 80)
+        return audio_io.safe_filename(self.loaded.name if self.loaded else "track", 80)
 
     def _song_dir(self) -> Path:
         return self.output_dir / self._song()
 
     def _label(self, key: str) -> str:
-        return engine.stem_label(key, self.result.mode if self.result else "4")
+        return engine.stem_label(key, self.result.mode if self.result else MODE)
 
     def _key_suffix(self) -> str:
         return f" [Key {self.key_target:+d}]" if self.key_target else ""
@@ -1270,7 +1348,7 @@ class MainWindow(QMainWindow):
         res, la = self.result, self.loaded
         return ExportSource(stems={st.key: st.path for st in res.stems}, residual_key=res.stems[-1].key,
                             mix44_path=la.mix_path, native_path=la.native_path or la.mix_path,
-                            native_rate=la.native_rate)
+                            native_rate=la.native_rate, model_rate=res.model_rate)
 
     def _run_export(self, jobs: list[ExportJob]):
         if self.busy() or not jobs or self.result is None:
@@ -1290,7 +1368,7 @@ class MainWindow(QMainWindow):
                         "[설정…]에서 다른 폴더를 선택해 주세요.")
             return
         opts = ExportOptions(keep_native_rate=self.keep_native_rate, semitones=self.key_target,
-                             keep_drums_pitch=self.keep_drums_box.isChecked())
+                             keep_drums_pitch=True, formant_vocals=self.formant_box.isChecked())
         self.export_thread = ExportThread(self._export_source(), jobs, opts, self.session_dir, self)
         self.export_thread.progress.connect(self._on_progress)
         self.export_thread.done.connect(self._on_exported)
@@ -1306,7 +1384,8 @@ class MainWindow(QMainWindow):
 
     def _on_exported(self, report):
         files = report.files
-        extra = f" · {report.sample_rate / 1000:g}kHz"
+        rates = sorted({d.sample_rate for d in report.details}) or [report.sample_rate]
+        extra = " · " + "/".join(f"{r / 1000:g}kHz" for r in rates)
         if report.gain_db < 0:
             extra += f" · 클리핑 방지 {report.gain_db:.1f}dB"
         self.set_status(f"{len(files)}개 파일 저장 완료{extra} → {self._song_dir()}")
@@ -1316,7 +1395,7 @@ class MainWindow(QMainWindow):
         box.setWindowTitle("저장 완료")
         box.setText(f"{len(files)}개 파일을 저장했습니다.")
         info = "\n".join(Path(f).name for f in files[:8]) + ("\n…" if len(files) > 8 else "")
-        info += f"\n\n샘플레이트: {report.sample_rate / 1000:g}kHz"
+        info += "\n\n" + "\n".join(f"{Path(d.path).name}: {d.verified}" for d in report.details[:4])
         if report.gain_db < 0:
             info += (f"\n소리가 0dBFS를 넘는 부분이 있어 잘림을 막기 위해 음량을 {abs(report.gain_db):.1f}dB "
                      "낮췄습니다. (원래 음량 그대로 저장하려면 'WAV 32-bit float' 형식을 선택하세요)")
@@ -1331,12 +1410,24 @@ class MainWindow(QMainWindow):
     def _on_key_slider(self, v: int):
         self.key_target = int(v)
         self.key_value.setText("0" if v == 0 else f"{v:+d}")
-        self.key_value.setStyleSheet("" if v == 0 else f"color:{theme.ACCENT};")
-        self.key_timer.start()
+        self.key_value.setStyleSheet("" if v == 0 else f"color:{theme.ACCENT_2};")
+        self.home.set_key(int(v))
+        if self.track_paths:
+            self.key_timer.start()
 
-    def _on_keep_drums(self, *_):
+    def _on_home_key(self, v: int):
+        self.key_slider.blockSignals(True)
+        self.key_slider.setValue(int(v))
+        self.key_slider.blockSignals(False)
+        self.key_target = int(v)
+        self.key_value.setText("0" if v == 0 else f"{v:+d}")
+        self.key_value.setStyleSheet("" if v == 0 else f"color:{theme.ACCENT_2};")
+        if self.track_paths:
+            self.key_timer.start()
+
+    def _on_formant(self, *_):
         self._save_settings()
-        if self.key_target != 0 and "drums" in self.track_paths:
+        if self.key_target != 0 and "vocals" in self.track_paths:
             self._invalidate_key_cache()
             self._apply_key()
 
@@ -1356,8 +1447,8 @@ class MainWindow(QMainWindow):
             return
         if self.key_thread is not None:
             self.key_thread.cancel()
-        t = KeyThread(self.track_paths, target, self.keep_drums_box.isChecked(),
-                      self.session_dir / "key", self)
+        t = KeyThread(self.track_paths, target, True, self.session_dir / "key", self,
+                      formant_vocals=self.formant_box.isChecked())
         gen = id(self.track_paths)
         t.progress.connect(lambda f, m: self.set_status(m, "busy"))
         t.done.connect(lambda semis, paths_, gen=gen: self._on_key_done(semis, paths_, gen))
@@ -1397,6 +1488,7 @@ class MainWindow(QMainWindow):
             self.output_dir = Path(d)
             self._save_settings()
             self.set_status(f"저장 폴더: {self.output_dir}")
+            self._update_home_footer()
 
     def open_output_dir(self):
         target = self._song_dir() if self.loaded and self._song_dir().exists() else self.output_dir
@@ -1456,11 +1548,317 @@ class MainWindow(QMainWindow):
         self.master.setVisible(wide)
         self.vol_icon.setVisible(wide)
 
+    # ====================================================== 홈 화면 연결 ===
+    def _wire_home(self):
+        h = self.home
+        h.advancedRequested.connect(self.show_advanced)
+        h.settingsRequested.connect(lambda: SettingsDialog(self).exec())
+        h.browseRequested.connect(self.home_browse)
+        h.fileChosen.connect(self.home_set_file)
+        h.startRequested.connect(self.start_home_job)
+        h.keyChanged.connect(self._on_home_key)
+        h.targetChanged.connect(lambda _t: self.settings.setValue("target", _t))
+        h.status.cancelRequested.connect(self.cancel_home_job)
+        h.status.fastRequested.connect(lambda: self.restart_home_job("speed"))
+        h.result.openFolder.connect(self._open_job_folder)
+        h.result.openFile.connect(self._open_job_file)
+        h.result.showAdvanced.connect(self.show_advanced)
+        h.result.newJob.connect(self._home_new_job)
+        h.error.retry.connect(lambda: self.start_home_job())
+        h.error.fast.connect(lambda: self.start_home_job(preset_override="speed"))
+        h.error.update_youtube.connect(self.update_youtube)
+        h.error.dismiss.connect(h.reset_panels)
+        self.fmt_combo.currentIndexChanged.connect(lambda *_: (self._save_settings(), self._update_home_footer()))
+
+    def _update_home_footer(self):
+        if not hasattr(self, "output_dir"):
+            return
+        fmt = self.fmt_combo.currentData() or audio_io.DEFAULT_FORMAT
+        self.home.set_footer(audio_io.EXPORT_FORMATS[fmt][0].replace(" (권장)", ""), self.output_dir)
+
+    def home_browse(self):
+        exts = " ".join(f"*{e}" for e in sorted(audio_io.SUPPORTED_EXTENSIONS))
+        start = self.settings.value("last_dir", str(Path.home() / "Music"))
+        fn, _ = QFileDialog.getOpenFileName(self, "음원 파일 선택", start, f"오디오/동영상 ({exts});;모든 파일 (*)")
+        if fn:
+            self.settings.setValue("last_dir", str(Path(fn).parent))
+            self.home_set_file(Path(fn))
+
+    def home_set_file(self, path: Path):
+        path = Path(path)
+        if self.busy():
+            return
+        if not path.is_file():
+            self.home.show_error("파일을 열 수 없습니다", f"파일을 찾을 수 없습니다:\n{path}", False, False, False)
+            return
+        self.home.set_file(path, "")
+        info = audio_io.probe_audio(path)
+        if not info.codec:
+            self.home.set_file_detail("오디오를 찾을 수 없는 파일입니다. 다른 파일을 선택해 주세요.")
+            return
+        dur = audio_io.format_time(info.duration) if info.duration else "?"
+        self.home.set_file_detail(f"{info.summary()} · {dur}")
+
+    def _home_steps(self, kind: str, semitones: int) -> list:
+        steps = [("check", "입력 확인")]
+        if kind == "youtube":
+            steps.append(("acquire", "오디오 가져오기"))
+        steps += [("decode", "디코딩"), ("model", "AI 모델 준비"), ("separate", "AI 음원 분리")]
+        if semitones:
+            steps.append(("key", "키 조절"))
+        steps.append(("encode", "저장"))
+        return steps
+
+    def start_home_job(self, preset_override: Optional[str] = None):
+        if self.busy():
+            return
+        h = self.home
+        kind = h.source_kind()
+        if kind not in ("file", "youtube"):
+            h.show_error("입력을 확인해 주세요", "음원 파일을 선택하거나 YouTube 영상 주소를 입력해 주세요."
+                         if kind == "" else "올바른 YouTube 영상 주소가 아닙니다.\n예: https://www.youtube.com/watch?v=…",
+                         False, False, False)
+            return
+        if kind == "youtube" and not self._youtube_consent():
+            return
+        preset = preset_override or self.preset_key()
+        self._job_preset_override = preset_override
+        device = self._resolve_device()
+        model_override = os.environ.get("MUSIC_SEPARATOR_FORCE_MODEL") or None
+        spec = pipeline.JobSpec(
+            source=h.source_text(), out_dir=self.output_dir, target=h.target(), semitones=self.key_target,
+            fmt=self.fmt_combo.currentData() or audio_io.DEFAULT_FORMAT, preset=preset, engine=self.engine_key(),
+            device=device, formant_vocals=self.formant_box.isChecked(), keep_native_rate=self.keep_native_rate,
+            model_override=model_override)
+        self._save_settings()
+        # 같은 입력이면 디코딩·분리 결과를 재사용 (결과물/키만 바꿔 다시 받을 때 빠름)
+        prev_prep = self.last_prep if self.last_prep is not None else None
+        self.player.pause()
+        self.pipeline_thread = PipelineThread(spec, self.session_dir / "jobs", prev_prep, self.last_sep,
+                                              self.last_sep_key, self)
+        t = self.pipeline_thread
+        t.progress.connect(self._on_home_progress)
+        t.notice.connect(self.home.status.show_notice)
+        t.done.connect(self._on_home_done)
+        t.failed.connect(self._on_home_failed)
+        t.cancelled.connect(self._on_home_cancelled)
+        t.finished.connect(lambda: (self._thread_finished("pipeline_thread"), self._home_finished()))
+        h.status.set_steps(self._home_steps(kind, spec.semitones))
+        resolved = engine.resolve_engine(spec.engine, preset, model_override)
+        h.status.fast_btn.setVisible(resolved == "roformer" and device == "cpu")
+        h.status.set_progress(0.0, "준비 중…", self._job_subtitle(spec, resolved, device))
+        h.set_busy(True)
+        self._job_t0 = __import__("time").monotonic()
+        self._job_spec = spec
+        self._job_engine = resolved
+        t.start()
+        self._set_state()
+        self.set_status("홈 화면에서 음원 추출 중…", "busy")
+
+    def _job_subtitle(self, spec, resolved: str, device: str) -> str:
+        dev = {"cuda": "NVIDIA GPU", "mps": "Apple GPU", "cpu": "CPU"}.get(device, device)
+        txt = f"{engine.ENGINES[resolved].short} · {engine.PRESETS[spec.preset].title} · {dev}"
+        if resolved == "roformer" and device == "cpu":
+            txt += " · CPU 에서는 시간이 오래 걸립니다 (곡 길이의 수 배)"
+        return txt
+
+    def restart_home_job(self, preset: str):
+        if self.pipeline_thread is not None:
+            self._restart_after_cancel = preset
+            self.pipeline_thread.cancel()
+
+    def cancel_home_job(self):
+        if self.pipeline_thread is not None:
+            self.pipeline_thread.cancel()
+            self.home.status.cancel_btn.setEnabled(False)
+            self.home.status.cancel_btn.setText("취소 중…")
+            self.home.status.set_progress(self.home.status.bar.value() / 1000, "현재 단계를 마무리하고 취소합니다…")
+
+    def _on_home_progress(self, stage: str, overall: float, msg: str):
+        import time as _t
+
+        st = self.home.status
+        if stage != "done":
+            st.set_stage(stage)
+        el = _t.monotonic() - self._job_t0
+        sub = f"경과 {audio_io.format_time(el)}"
+        if overall > 0.08 and el > 5:
+            remain = el / overall * (1 - overall)
+            sub += f" · 남은 시간 약 {audio_io.format_time(remain)}"
+        st.set_progress(overall, msg, self._job_subtitle(self._job_spec, self._job_engine, self._job_spec.device)
+                        + " · " + sub)
+
+    def _on_home_done(self, res):
+        self.last_job = res
+        self.last_prep = res.prepared
+        self.last_sep = res.separation
+        self.last_sep_key = getattr(res, "separation_key", None)
+        self.home.status.finish_all()
+        exp = res.export
+        lines = []
+        for d in exp.details:
+            name = Path(d.path).name
+            fmt = audio_io.EXPORT_FORMATS[d.fmt][0].replace(" (권장)", "")
+            key = f" · 키 {d.semitones:+d}" + (" (음색 유지)" if d.formant else "") if d.semitones else ""
+            lines.append(f"<b>{name}</b><br><span style='color:{theme.TEXT_DIM}'>{fmt} · {d.sample_rate / 1000:g}kHz · "
+                         f"{audio_io.format_time(d.seconds)}{key}</span>")
+        rep = res.report
+        detail = []
+        inp = rep["input"]
+        if "youtube" in rep:
+            y = rep["youtube"]
+            detail.append(f"입력: YouTube {y['codec_name']} {y['abr_kbps']:g}kbps · {y['sample_rate'] / 1000:g}kHz "
+                          f"(오디오 전용 스트림, 재인코딩 없음)")
+        else:
+            detail.append(f"입력: {inp['codec'].upper()} · {inp['sample_rate'] / 1000:g}kHz"
+                          + (f" · {inp['bit_rate_kbps']}kbps" if inp['bit_rate_kbps'] and not inp['lossless'] else ""))
+        sep = rep["separation"]
+        dev = {"cuda": "NVIDIA GPU", "mps": "Apple GPU", "cpu": "CPU"}.get(sep["device"], sep["device"])
+        detail.append(f"분리: {engine.ENGINES[sep['engine']].short} ({engine.PRESETS[sep['preset']].title}) · {dev}"
+                      + (" · 이전 결과 재사용" if sep["reused"] else f" · {audio_io.format_time(sep['elapsed_sec'])}"))
+        if exp.gain_db < 0:
+            detail.append(f"0dBFS 를 넘는 부분이 있어 음량을 {abs(exp.gain_db):.1f}dB 낮췄습니다 (리미터 없이 고정 배율).")
+        title = {"mr": "반주(MR) 파일을 저장했습니다", "vocals": "보컬 파일을 저장했습니다"}.get(
+            self._job_spec.target, "파일을 저장했습니다")
+        self.home.show_result(title, "<br>".join(lines), "\n".join(detail))
+        self._adopt_pipeline_result(res)
+        self.set_status(f"홈 작업 완료 → {Path(exp.files[0]).parent if exp.files else self.output_dir}")
+        log.info("home job report: %s", rep)
+
+    def _on_home_failed(self, err):
+        self.last_pipeline_error = err
+        self.last_error = str(err)
+        log.warning("home job failed: %s", err)
+        stage = pipeline.STAGE_LABEL.get(getattr(err, "stage", ""), "")
+        title = f"{stage} 단계에서 문제가 생겼습니다" if stage else "처리하지 못했습니다"
+        fast = bool(getattr(err, "can_use_fast_model", False)) and self._job_spec.preset != "speed"
+        self.home.show_error(title, str(err), bool(getattr(err, "retryable", True)), fast,
+                             bool(getattr(err, "can_update_youtube", False)))
+        self.set_status("홈 작업 실패", "error")
+
+    def _on_home_cancelled(self):
+        self.set_status("작업을 취소했습니다.")
+
+    def _home_finished(self):
+        self.home.set_busy(False)
+        self._set_state()
+        preset = getattr(self, "_restart_after_cancel", None)
+        if preset:
+            self._restart_after_cancel = None
+            QTimer.singleShot(100, lambda: self.start_home_job(preset_override=preset))
+
+    def _home_new_job(self):
+        self.home.reset_panels()
+        self.home.url.clear()
+        self.home._clear_file()
+
+    def _open_job_folder(self):
+        if self.last_job and self.last_job.files:
+            paths.open_in_file_manager(Path(self.last_job.files[0]).parent)
+        else:
+            self.open_output_dir()
+
+    def _open_job_file(self):
+        if self.last_job and self.last_job.files:
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.last_job.files[0])))
+
+    def _adopt_pipeline_result(self, res):
+        """홈 작업 결과를 고급 옵션 화면에 불러옴 (재생·다른 형식 저장용)."""
+        prep = res.prepared
+        try:
+            self._reset_tracks(clear_original=True)
+            self._invalidate_key_cache()
+            la = LoadedAudio(prep.source_path, prep.mix44_path, prep.n_samples, prep.peaks, prep.native_rate,
+                             prep.native_path, title=prep.title, source_id=prep.source_id)
+            self._on_loaded(la)
+            self._purge_cache(keep=self._top_dirs([prep.mix44_path, prep.native_path] +
+                                                  [s.path for s in res.separation.stems]))
+            self._on_separated(res.separation)
+        except Exception:  # noqa: BLE001 - 홈 결과 파일은 이미 저장됨
+            log.exception("could not load home result into advanced view")
+
+    def _youtube_consent(self) -> bool:
+        if self.settings.value("yt_consent", False, type=bool) or os.environ.get("MUSIC_SEPARATOR_NONINTERACTIVE"):
+            return True
+        box = QMessageBox(self)
+        box.setWindowTitle("YouTube 입력 안내")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText("권리가 있는 콘텐츠만 사용해 주세요")
+        box.setInformativeText(youtube.RIGHTS_NOTICE)
+        ok = box.addButton("확인했습니다", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("취소", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is ok:
+            self.settings.setValue("yt_consent", True)
+            return True
+        return False
+
+    def open_youtube(self):
+        """고급 옵션: YouTube 주소로 오디오를 받아 불러오기 (분리는 따로)."""
+        if self.busy():
+            return
+        url, ok = QInputDialog.getText(self, "YouTube에서 불러오기", "YouTube 영상 주소:", QLineEdit.EchoMode.Normal, "")
+        if not ok or not url.strip():
+            return
+        if not youtube.video_id(url):
+            self._error("올바른 YouTube 영상 주소가 아닙니다.\n예: https://www.youtube.com/watch?v=…")
+            return
+        if not self._youtube_consent():
+            return
+        self._reset_tracks(clear_original=True)
+        self._invalidate_key_cache()
+        self._purge_cache()
+        self.run_counter += 1
+        self.yt_thread = YouTubeLoadThread(url, self.session_dir / f"yt{self.run_counter}",
+                                           self.session_dir / f"yt{self.run_counter}" / "original.npy", self)
+        (self.session_dir / f"yt{self.run_counter}").mkdir(parents=True, exist_ok=True)
+        self.yt_thread.progress.connect(lambda f, m: (self._on_progress(f, m), self.set_status(m, "busy")))
+        self.yt_thread.done.connect(lambda la, acq: (self._on_loaded(la), self.set_status(
+            f"{la.name} — {acq.codec_name} {acq.abr_kbps:g}kbps {acq.sample_rate / 1000:g}kHz (재인코딩 없음). "
+            "[AI 분리 시작]을 누르세요.")))
+        self.yt_thread.failed.connect(lambda m: (self.set_status("YouTube 오디오를 가져오지 못했습니다.", "error"),
+                                                 self.stack.setCurrentIndex(0) if self.loaded is None else None,
+                                                 self._error(m)))
+        self.yt_thread.finished.connect(lambda: (self._thread_finished("yt_thread"), self._work_finished()))
+        self._show_progress(True, cancellable=True)
+        self._on_progress(0.0, "YouTube 영상 정보 확인 중…")
+        self.set_status("YouTube 오디오 가져오는 중…", "busy")
+        self.yt_thread.start()
+        self._set_state()
+
+    def update_youtube(self):
+        if self.yt_update_thread is not None:
+            return
+        t = YouTubeUpdateThread(self)
+        self.yt_update_thread = t
+        t.progress.connect(lambda f, m: self.set_status(m, "busy"))
+        t.done.connect(self._on_yt_updated)
+        t.failed.connect(lambda m: (self.set_status("업데이트 실패", "error"), self._error(m)))
+        t.finished.connect(lambda: (setattr(self, "yt_update_thread", None), t.deleteLater()))
+        self.set_status("YouTube 기능 업데이트 중…", "busy")
+        t.start()
+
+    def _on_yt_updated(self, ver: str):
+        self.set_status(f"YouTube 기능을 {ver} 로 업데이트했습니다. 다시 시작하면 적용됩니다.")
+        if os.environ.get("MUSIC_SEPARATOR_NONINTERACTIVE"):
+            return
+        r = QMessageBox.question(self, "업데이트 완료",
+                                 f"YouTube 다운로드 도구를 {ver} 버전으로 업데이트했습니다.\n"
+                                 "프로그램을 다시 시작하면 적용됩니다. 지금 다시 시작할까요?")
+        if r == QMessageBox.StandardButton.Yes and not self.busy():
+            args = sys.argv[1:] if getattr(sys, "frozen", False) else sys.argv
+            QProcess.startDetached(sys.executable, args)
+            self.close()
+
     # ======================================================= drag & drop ===
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls() and not self.busy():
             e.acceptProposedAction()
-            self.drop_zone.set_hover(True)
+            if self.pages.currentIndex() == 1:
+                self.drop_zone.set_hover(True)
 
     def dragLeaveEvent(self, e):
         self.drop_zone.set_hover(False)
@@ -1468,7 +1866,11 @@ class MainWindow(QMainWindow):
     def dropEvent(self, e):
         self.drop_zone.set_hover(False)
         urls = [u for u in e.mimeData().urls() if u.isLocalFile()]
-        if urls:
+        if not urls:
+            return
+        if self.pages.currentIndex() == 0:
+            self.home_set_file(Path(urls[0].toLocalFile()))
+        else:
             self.open_file(Path(urls[0].toLocalFile()))
 
     # ============================================================== misc ===
@@ -1509,11 +1911,12 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self, f"{APP_NAME} 정보",
             f"<b>{APP_NAME}</b> v{__version__}<br><br>"
-            "AI 음원 분리: Demucs (Meta AI Research, MIT License)<br>"
-            "고급 엔진: BS-RoFormer (코드 MIT · SW 모델 by jarredou, 커뮤니티 모델)<br>"
-            "키 조절: Signalsmith Stretch (MIT) · GUI: Qt for Python / PySide6 (LGPLv3) · "
-            "글꼴: Pretendard (SIL OFL 1.1)<br>"
-            "오디오 변환: FFmpeg · MP3 인코더: LAME<br>"
+            "AI 음원 분리: BS-RoFormer (코드 MIT · SW 모델 by jarredou, 커뮤니티 모델) · "
+            "Demucs (Meta AI Research, MIT)<br>"
+            f"키 조절: Rubber Band Library R3 (GPL, 별도 실행 파일 rbshift) · 현재 엔진: {pitch.engine_name() or '없음'}<br>"
+            f"YouTube: yt-dlp {youtube.ytdlp_version()} (Unlicense) · Deno (MIT)<br>"
+            "리샘플링: soxr (LGPL) · 오디오 변환: FFmpeg · MP3 인코더: LAME<br>"
+            "GUI: Qt for Python / PySide6 (LGPLv3) · 글꼴: Pretendard (SIL OFL 1.1)<br>"
             f"PyTorch {tv} · Python {platform.python_version()} · {platform.system()} {platform.machine()}<br><br>"
             "분리된 음원의 저작권은 원곡 권리자에게 있습니다.")
 
@@ -1524,9 +1927,11 @@ class MainWindow(QMainWindow):
                 e.ignore()
                 return
             self.cancel_work()
-            for t in (self.sep_thread, self.export_thread, self.load_thread):
+            if self.pipeline_thread is not None:
+                self.pipeline_thread.cancel()
+            for t in (self.sep_thread, self.export_thread, self.load_thread, self.pipeline_thread, self.yt_thread):
                 if t is not None and t.isRunning():
-                    t.wait(15000)
+                    t.wait(20000)
         if self.key_thread is not None:
             self.key_thread.cancel()
             self.key_thread.wait(30000)
@@ -1543,23 +1948,20 @@ class MainWindow(QMainWindow):
         e.accept()
 
 
-HELP_TEXT = """1. 음악 파일을 창에 끌어다 놓거나 [파일 열기]를 누릅니다.
-2. 왼쪽에서 분리 모드와 AI 엔진을 고릅니다.
-   • 2-Stem: 보컬 / 반주 · 4-Stem: 보컬 / 드럼 / 베이스 / 기타 악기
-   • 6-Stem: 보컬 / 드럼 / 베이스 / 기타 / 피아노 / 나머지
-   • 표준(Demucs): 빠르고 안정적 · 고급(BS-RoFormer): 피아노·기타가 훨씬 깔끔 (GPU 권장)
-3. [AI 분리 시작]을 누릅니다.
-4. 분리가 끝나면 ▶(Space)로 재생합니다.
-   • M: 음소거 · S: 솔로(이 트랙만 듣기) · 슬라이더: 볼륨(더블클릭 = 100%)
-   • 파형이나 시간 눈금을 클릭하면 그 위치로 이동합니다.
-   • Ctrl(⌘)+휠 또는 오른쪽 위 −/+ 로 파형을 확대, Shift+휠로 좌우 이동
-5. MR 만들기: 뺄 악기 버튼을 누르고(빨간색 = 제외) [MR 저장].
-   원본에서 그 악기만 빼므로 남는 악기는 원본 음질 그대로입니다.
-6. 키 조절: −/+ 또는 슬라이더로 반음 단위(−12~+12) 조절. 재생과 저장에 모두 적용됩니다.
-7. 저장: 아래쪽에서 형식을 고르고 [선택한 트랙 저장](트랙 스위치 켠 것) 또는 [전체 트랙 저장].
-   • 기본은 WAV 24-bit · 원본 샘플레이트. MP3도 선택할 수 있습니다.
-   • 저장 폴더와 샘플레이트 설정은 [설정…]에서 바꿉니다.
+HELP_TEXT = """[홈 화면 — 원클릭]
+1. 음원 파일을 끌어다 놓거나 [파일 선택], 또는 YouTube 영상 주소를 붙여넣습니다.
+2. [보컬만] 또는 [반주(MR)만]을 고릅니다 (기본: 반주).
+3. 키 조절: −/+ 또는 슬라이더 (−12 ~ +12 반음, 템포·길이는 그대로). 0 이면 처리하지 않습니다.
+4. [음원 추출 시작] → 진행 상황이 단계별로 표시되고, 끝나면 저장 폴더에 파일이 생깁니다.
+   • 기본 출력: WAV 24-bit (설정에서 FLAC·MP3 320kbps 선택)
+   • YouTube 는 권리가 있는 영상만 사용하세요.
+
+[고급 옵션]
+• 처리 방식: 속도 우선(Demucs) / 품질 우선(BS-RoFormer, 기본) / 최고 품질(겹침 4배)
+• AI 모델·처리 장치 선택, 트랙별 재생(M 음소거 · S 솔로 · 볼륨), 파형 확대
+• MR 저장(가이드 보컬 작게 남기기 가능) · 보컬만 저장 · 선택/전체 트랙 저장
+• 키 조절과 '보컬 음색(포먼트) 유지' — 보컬 결과물에만 적용
 
 • NVIDIA GPU 또는 Apple Silicon Mac에서는 GPU로 훨씬 빠르게 처리됩니다.
 • GPU에서 문제가 생기면 자동으로 CPU로 다시 처리합니다.
-• 처리 중 [취소]를 누르면 바로 멈춥니다."""
+• 처리 중 [취소]를 누르면 바로 멈추고 임시 파일을 정리합니다."""

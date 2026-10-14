@@ -1,11 +1,13 @@
 """오디오 입출력.
 
-- 디코딩: FFmpeg(번들된 imageio-ffmpeg 바이너리 → 시스템 PATH 순으로 탐색)로 스테레오 float32 변환
-  (AI 처리용 44.1kHz 와, 원본 샘플레이트 그대로의 사본)
-- 리샘플링: julius (고품질 sinc, Demucs 의존성)
-- WAV 저장: 16/24-bit PCM, 32-bit float (직접 헤더 작성)
-- FLAC 저장: FFmpeg 파이프 (24-bit)
-- MP3 저장: lameenc (LAME 인코더)
+- 디코딩: FFmpeg(번들된 imageio-ffmpeg 바이너리 → 시스템 PATH 순으로 탐색)로 스테레오 float32 변환.
+  원본 샘플레이트 그대로 한 번만 디코딩하고(FFmpeg 리샘플러 사용 안 함), AI 모델이 요구하는
+  44.1kHz 가 필요할 때만 아래 고품질 리샘플러로 한 번 변환합니다.
+- 리샘플링: soxr VHQ (THD+N 약 -150dB, 22kHz 이상 성분의 앨리어싱 약 -150dB).
+  FFmpeg 기본 리샘플러(swr)는 22.6kHz 성분이 -15dB 로 접혀 들어오므로 쓰지 않음.
+- WAV 저장: 16-bit(TPDF 디더) / 24-bit PCM, 32-bit float (직접 헤더 작성)
+- FLAC 저장: 24-bit 로 반올림한 정수를 FFmpeg 에 그대로 전달 (WAV 24-bit 와 같은 샘플값)
+- MP3 저장: FFmpeg libmp3lame 320kbps CBR, LAME/Xing 헤더 (인코더 지연 보정 정보)
 """
 from __future__ import annotations
 
@@ -18,6 +20,8 @@ import sys
 import wave
 from pathlib import Path
 from typing import Callable, Optional
+
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -88,6 +92,85 @@ _DURATION_RE = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
 
 
 _RATE_RE = re.compile(r"Audio:.*?(\d{4,6}) Hz")
+_AUDIO_RE = re.compile(r"Stream #\d+:(\d+)(?:\[\w+\])?(?:\((\w+)\))?: Audio: ([^\n]+)")
+_INPUT_RE = re.compile(r"Input #0, ([^,\n]+(?:,[^,\n ]+)*), from")
+_BITRATE_RE = re.compile(r"Duration:.*?bitrate: (\d+) kb/s")
+
+
+@dataclass
+class AudioInfo:
+    """FFmpeg 로 확인한 입력 파일 정보 (검증·표시용)."""
+    codec: str = ""              # 예: opus, aac (LC), mp3, flac, pcm_s24le
+    sample_rate: int = 0
+    channels: int = 0
+    channel_layout: str = ""     # stereo, mono, 5.1 …
+    sample_format: str = ""      # fltp, s16, s32 …
+    bit_rate_kbps: int = 0       # 스트림 비트레이트 (없으면 전체 비트레이트)
+    duration: float = 0.0
+    container: str = ""          # matroska,webm / mov,mp4,m4a,... / wav …
+    lossless: bool = False
+
+    def summary(self) -> str:
+        parts = [self.codec.upper() if self.codec else "?"]
+        if self.sample_rate:
+            parts.append(f"{self.sample_rate / 1000:g}kHz")
+        if self.channel_layout:
+            parts.append(self.channel_layout)
+        if self.bit_rate_kbps and not self.lossless:
+            parts.append(f"{self.bit_rate_kbps}kbps")
+        return " · ".join(parts)
+
+
+_LOSSLESS = ("flac", "alac", "pcm_", "wavpack", "ape", "tta", "truehd", "mlp")
+
+
+def probe_audio(path: Path) -> AudioInfo:
+    """첫 번째 오디오 스트림의 코덱/샘플레이트/채널/비트레이트."""
+    text = _probe_text(path)
+    info = AudioInfo()
+    m = _DURATION_RE.search(text)
+    if m:
+        h, mi, sec = m.groups()
+        info.duration = int(h) * 3600 + int(mi) * 60 + float(sec)
+    m = _INPUT_RE.search(text)
+    if m:
+        info.container = m.group(1)
+    a = _AUDIO_RE.search(text)
+    if a:
+        desc = a.group(3)
+        fields = [f.strip() for f in re.split(r",(?![^(]*\))", desc)]
+        codec = fields[0] if fields else ""
+        info.codec = re.sub(r"\s*\((?!LC|HE|Main|LTP)[^)]*\)", "", codec).strip()
+        for f in fields[1:]:
+            if f.endswith(" Hz"):
+                try:
+                    info.sample_rate = int(f.split()[0])
+                except ValueError:
+                    pass
+            elif f.endswith("kb/s"):
+                try:
+                    info.bit_rate_kbps = int(f.split()[0])
+                except ValueError:
+                    pass
+            elif f in ("mono", "stereo") or re.match(r"^\d+(\.\d+)?(\(\w+\))?$", f) or "channels" in f:
+                info.channel_layout = f
+            elif re.match(r"^(u8|s16|s32|s64|flt|dbl)p?(\s*\(\d+ bit\))?$", f):
+                info.sample_format = f
+        lay = info.channel_layout
+        info.channels = {"mono": 1, "stereo": 2}.get(lay, 0)
+        if not info.channels and lay:
+            m2 = re.match(r"(\d+)\.(\d+)", lay)
+            if m2:
+                info.channels = int(m2.group(1)) + int(m2.group(2))
+            m3 = re.match(r"(\d+) channels", lay)
+            if m3:
+                info.channels = int(m3.group(1))
+    if not info.bit_rate_kbps:
+        m = _BITRATE_RE.search(text)
+        if m:
+            info.bit_rate_kbps = int(m.group(1))
+    info.lossless = any(info.codec.lower().startswith(k) for k in _LOSSLESS)
+    return info
 
 
 def _probe_text(path: Path) -> str:
@@ -117,32 +200,63 @@ def probe_sample_rate(path: Path) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
+RESAMPLER = "soxr VHQ"
+
+
 def resample(data: np.ndarray, src: int, dst: int) -> np.ndarray:
-    """(n, ch) float32 고품질 리샘플링 (julius sinc). 같은 레이트면 그대로 반환."""
+    """(n, ch) float32 고품질 리샘플링 (soxr VHQ). 같은 레이트면 그대로 반환 (변환 없음).
+
+    출력 길이는 round(n * dst / src) 로 맞추고, 지연은 soxr 이 보정합니다 (시간 위치 동일)."""
     if src == dst:
         return np.asarray(data, dtype=np.float32)
-    import torch
-    from julius import resample_frac
+    x = np.ascontiguousarray(np.asarray(data, dtype=np.float32))
+    n_out = int(round(len(x) * dst / src))
+    try:
+        import soxr
 
-    x = torch.from_numpy(np.ascontiguousarray(np.asarray(data, dtype=np.float32).T))
-    with torch.no_grad():
-        y = resample_frac(x, src, dst)
-    n_out = int(round(len(data) * dst / src))
-    y = y[:, :n_out]
-    if y.shape[1] < n_out:
-        y = torch.nn.functional.pad(y, (0, n_out - y.shape[1]))
-    return np.ascontiguousarray(y.T.numpy(), dtype=np.float32)
+        y = soxr.resample(x, src, dst, quality="VHQ")
+    except ImportError:  # pragma: no cover - soxr 누락 시 julius 로 대체
+        import torch
+        from julius import resample_frac
+
+        with torch.no_grad():
+            y = resample_frac(torch.from_numpy(np.ascontiguousarray(x.T)), src, dst).T.numpy()
+    y = y[:n_out]
+    if len(y) < n_out:
+        y = np.pad(y, ((0, n_out - len(y)), (0, 0)))
+    return np.ascontiguousarray(y, dtype=np.float32)
 
 
-def decode_audio(path: Path, sample_rate: int = SAMPLE_RATE) -> np.ndarray:
-    """오디오 파일을 (samples, 2) float32 배열로 디코딩."""
+def true_peak(data: np.ndarray, sample_rate: int, block: int = SAMPLE_RATE * 20) -> float:
+    """4배 오버샘플링으로 샘플 사이 피크까지 포함한 최대값 (선형). 블록 단위로 메모리 절약."""
+    import soxr
+
+    n, ch = len(data), data.shape[1]
+    rs = soxr.ResampleStream(sample_rate, sample_rate * 4, ch, dtype="float32", quality="VHQ")
+    peak = 0.0
+    for start in range(0, n, block):
+        chunk = np.ascontiguousarray(np.asarray(data[start:start + block], dtype=np.float32))
+        y = rs.resample_chunk(chunk, last=start + block >= n)
+        if len(y):
+            peak = max(peak, float(np.max(np.abs(y))))
+    if n == 0:
+        return 0.0
+    return max(peak, float(np.max(np.abs(np.asarray(data)))))
+
+
+def decode_audio(path: Path, sample_rate: Optional[int] = SAMPLE_RATE) -> np.ndarray:
+    """오디오 파일을 (samples, 2) float32 배열로 디코딩.
+
+    sample_rate=None 이면 원본 샘플레이트 그대로 (리샘플링 없음). 모노는 양쪽 채널에 복사,
+    3채널 이상은 FFmpeg 기본 행렬로 스테레오 다운믹스 (AI 모델이 스테레오만 처리)."""
     path = Path(path)
     if not path.exists():
         raise AudioError(f"파일을 찾을 수 없습니다: {path}")
+    rate_args = ["-ar", str(sample_rate)] if sample_rate else []
     cmd = [
         find_ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error",
         "-i", str(path), "-vn", "-map", "0:a:0",
-        "-f", "f32le", "-acodec", "pcm_f32le", "-ac", str(CHANNELS), "-ar", str(sample_rate),
+        "-f", "f32le", "-acodec", "pcm_f32le", "-ac", str(CHANNELS), *rate_args,
         "pipe:1",
     ]
     try:
@@ -157,18 +271,23 @@ def decode_audio(path: Path, sample_rate: int = SAMPLE_RATE) -> np.ndarray:
         )
     data = np.frombuffer(proc.stdout, dtype="<f4")
     data = data[: (len(data) // CHANNELS) * CHANNELS].reshape(-1, CHANNELS)
-    if len(data) < sample_rate // 10:
+    if len(data) < (sample_rate or SAMPLE_RATE) // 10:
         raise AudioError("오디오가 너무 짧습니다 (0.1초 미만).")
     return np.ascontiguousarray(data, dtype=np.float32)
 
 
 # ---------------------------------------------------------------- export ---
 
-def _to_int(block: np.ndarray, bits: int) -> np.ndarray:
-    block = np.clip(block, -1.0, 1.0)
+def _to_int(block: np.ndarray, bits: int, rng: Optional[np.random.Generator] = None) -> np.ndarray:
+    """float → 정수 PCM. 16-bit 는 TPDF 디더(±1 LSB 삼각 분포)로 양자화 왜곡을 잡음으로 바꿈.
+    24-bit 는 양자화 잡음이 -144dBFS 수준이라 디더 없이 반올림."""
+    block = np.asarray(block, dtype=np.float64)
     if bits == 16:
-        return (block * 32767.0).round().astype("<i2")
-    return (block * 8388607.0).round().astype("<i4")
+        scaled = block * 32767.0
+        if rng is not None:
+            scaled = scaled + rng.random(block.shape) - rng.random(block.shape)
+        return np.clip(np.round(scaled), -32768, 32767).astype("<i2")
+    return np.clip(np.round(block * 8388607.0), -8388608, 8388607).astype("<i4")
 
 
 def write_wav(path: Path, data: np.ndarray, bits: int = 16, sample_rate: int = SAMPLE_RATE,
@@ -177,13 +296,14 @@ def write_wav(path: Path, data: np.ndarray, bits: int = 16, sample_rate: int = S
     if bits not in (16, 24):
         raise ValueError("bits must be 16 or 24")
     n = len(data)
+    rng = np.random.default_rng(12345) if bits == 16 else None
     with wave.open(str(path), "wb") as wf:
         wf.setnchannels(data.shape[1])
         wf.setsampwidth(bits // 8)
         wf.setframerate(sample_rate)
         for start in range(0, n, block):
             chunk = np.asarray(data[start:start + block], dtype=np.float32)
-            ints = _to_int(chunk, bits)
+            ints = _to_int(chunk, bits, rng)
             if bits == 24:
                 raw = ints.reshape(-1).view(np.uint8).reshape(-1, 4)[:, :3].tobytes()
             else:
@@ -209,17 +329,22 @@ def ffmpeg_has_lame() -> bool:
 
 
 def _ffmpeg_encode(path: Path, data: np.ndarray, sample_rate: int, codec_args: list,
-                   progress: Optional[Callable[[float], None]], block: int, label: str) -> None:
+                   progress: Optional[Callable[[float], None]], block: int, label: str,
+                   input_format: str = "f32le") -> None:
     n, ch = len(data), data.shape[1]
     cmd = [find_ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
-           "-f", "f32le", "-ar", str(sample_rate), "-ac", str(ch), "-i", "pipe:0", *codec_args, str(path)]
+           "-f", input_format, "-ar", str(sample_rate), "-ac", str(ch), "-i", "pipe:0", *codec_args, str(path)]
     kw = _popen_kwargs()
     kw.pop("stdin", None)
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, **kw)
     try:
         for start in range(0, n, block):
-            chunk = np.clip(np.asarray(data[start:start + block], dtype=np.float32), -1.0, 1.0)
-            proc.stdin.write(np.ascontiguousarray(chunk, dtype="<f4").tobytes())
+            chunk = np.asarray(data[start:start + block], dtype=np.float32)
+            if input_format == "s32le":   # 24-bit 로 반올림한 값을 상위 24비트에 (FLAC 24-bit = WAV 24-bit 와 같은 값)
+                raw = (_to_int(chunk, 24).astype("<i4") << 8).astype("<i4").tobytes()
+            else:
+                raw = np.ascontiguousarray(np.clip(chunk, -1.0, 1.0), dtype="<f4").tobytes()
+            proc.stdin.write(raw)
             if progress:
                 progress(min(1.0, (start + block) / max(1, n)))
         proc.stdin.close()
@@ -234,11 +359,15 @@ def _ffmpeg_encode(path: Path, data: np.ndarray, sample_rate: int, codec_args: l
 
 def write_mp3(path: Path, data: np.ndarray, bitrate: int = 320, sample_rate: int = SAMPLE_RATE,
               progress: Optional[Callable[[float], None]] = None, block: int = SAMPLE_RATE * 10) -> None:
-    """MP3. FFmpeg(libmp3lame)이 있으면 LAME 헤더(인코더 지연 정보)를 기록해
-    재생 시 앞부분 무음/싱크 어긋남이 없도록 하고, 없으면 lameenc 로 인코딩."""
+    """MP3 320kbps CBR. FFmpeg(libmp3lame)이 있으면 LAME 헤더(인코더 지연 정보)를 기록해
+    재생 시 앞부분 무음/싱크 어긋남이 없도록 하고, 없으면 lameenc 로 인코딩.
+
+    주의: FFmpeg 에서 -q:a 를 함께 주면 -b:a 가 무시되고 VBR 로 인코딩되므로 쓰지 않음
+    (알고리즘 품질은 -compression_level 2 = LAME -q 2, LAME 권장 고품질)."""
     if ffmpeg_has_lame():
-        _ffmpeg_encode(path, data, sample_rate, ["-c:a", "libmp3lame", "-b:a", f"{bitrate}k", "-q:a", "0",
-                                                 "-write_xing", "1"], progress, block, "MP3")
+        _ffmpeg_encode(path, data, sample_rate, ["-c:a", "libmp3lame", "-b:a", f"{bitrate}k",
+                                                 "-compression_level", "2", "-write_xing", "1"],
+                       progress, block, "MP3")
         return
     try:
         import lameenc
@@ -279,9 +408,11 @@ def write_wav_float(path: Path, data: np.ndarray, sample_rate: int = SAMPLE_RATE
 
 def write_flac(path: Path, data: np.ndarray, sample_rate: int = SAMPLE_RATE,
                progress: Optional[Callable[[float], None]] = None, block: int = SAMPLE_RATE * 10) -> None:
-    """FLAC 24-bit (FFmpeg 로 인코딩)."""
+    """FLAC 24-bit (무손실 압축). WAV 24-bit 와 같은 반올림 규칙으로 정수화해 전달하므로
+    디코딩하면 WAV 24-bit 저장본과 샘플 단위로 같습니다."""
     _ffmpeg_encode(path, data, sample_rate, ["-c:a", "flac", "-sample_fmt", "s32", "-bits_per_raw_sample", "24",
-                                             "-compression_level", "8"], progress, block, "FLAC")
+                                             "-compression_level", "8"], progress, block, "FLAC",
+                   input_format="s32le")
 
 
 def write_audio(path: Path, data: np.ndarray, fmt: str, sample_rate: int = SAMPLE_RATE,

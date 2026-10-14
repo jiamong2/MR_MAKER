@@ -1,7 +1,11 @@
-"""Demucs 음원 분리 엔진 (GUI 와 독립적으로 동작, 테스트 가능).
+"""음원 분리 엔진 (GUI 와 독립적으로 동작, 테스트 가능).
 
+- 2-Stem(보컬/반주): 보컬만 AI 로 추정하고 반주는 '원본 − 보컬'로 계산 (두 트랙의 합 = 원본)
+- 엔진: BS-RoFormer SW (품질 우선, 기본) / Demucs htdemucs_ft 보컬 모델 (속도 우선)
+  선정 근거 (MVSEP Multisong 데이터셋, 같은 기준): 보컬 SDR — BS-RoFormer SW 11.30dB,
+  htdemucs_ft 8.33dB, htdemucs 8.18dB / 반주 SDR — 17.50dB, 14.63dB, 14.49dB
 - GPU(CUDA / Apple MPS) 우선 사용, 실패·메모리 부족·비정상 출력 시 자동으로 CPU 재시도
-- Demucs 4.1 apply_model 의 callback 으로 세그먼트 단위 진행률 보고 및 즉시 취소
+- 진행률 보고 및 즉시 취소, 모든 처리는 float32
 """
 from __future__ import annotations
 
@@ -27,7 +31,7 @@ log = logging.getLogger(__name__)
 # 표시 이름(한국어, 영어), 색상
 STEM_STYLE = {
     "vocals":       ("보컬", "Vocals", "#f29d12"),
-    "instrumental": ("반주", "Instrumental", "#5b6cf0"),
+    "instrumental": ("반주 (MR)", "Instrumental", "#3e8e7e"),
     "drums":        ("드럼", "Drums", "#2f8ff0"),
     "bass":         ("베이스", "Bass", "#9b51f0"),
     "guitar":       ("기타", "Guitar", "#22b573"),
@@ -62,36 +66,79 @@ class Engine:
 
 
 ENGINES: dict[str, Engine] = {
-    "demucs": Engine("demucs", "표준 (Demucs)", "Demucs",
-                     "Meta의 Demucs 모델. 빠르고 안정적이며 상업적 사용에 문제가 없는 MIT 라이선스입니다."),
-    "roformer": Engine("roformer", "고급 (BS-RoFormer)", "RoFormer",
-                       "피아노·기타 분리가 크게 좋아지는 최신 모델입니다. 처리량이 많아 GPU를 권장하며, "
-                       "모델 사용 조건이 명시되지 않은 커뮤니티 모델이라 개인 용도로 사용하세요."),
+    "auto": Engine("auto", "자동 (권장)", "자동",
+                   "품질 우선·최고 품질은 BS-RoFormer SW, 속도 우선은 Demucs 보컬 모델을 사용합니다."),
+    "roformer": Engine("roformer", "BS-RoFormer SW (최고 품질)", "BS-RoFormer",
+                       "보컬 SDR 11.30dB · 반주 17.50dB (MVSEP Multisong). 첫 사용 시 667MB 다운로드, GPU 권장. "
+                       "사용 조건이 명시되지 않은 커뮤니티 모델이라 개인 용도로 사용하세요."),
+    "demucs": Engine("demucs", "Demucs htdemucs_ft (빠름)", "Demucs",
+                     "보컬 SDR 8.33dB · 반주 14.63dB (MVSEP Multisong). 가볍고 빠르며 MIT 라이선스입니다."),
 }
 
-# 처리 설정
-DEMUCS_OVERLAP = {False: 0.25, True: 0.5}          # 구간 겹침 (고품질 = 경계 잡음 감소)
-SIX_SHIFTS = {False: 1, True: 2}                    # 6-Stem 2단계(기타/피아노) 시간 이동 평균 횟수
-ROFORMER_OVERLAP = {False: 2, True: 4}
+
+@dataclass(frozen=True)
+class Preset:
+    key: str
+    title: str
+    description: str
+    auto_engine: str          # 엔진 '자동'일 때 사용할 엔진
+    roformer_overlap: int     # 구간 겹침 횟수 (2 = 50% 겹침)
+    demucs_shifts: int        # 시간 이동 평균 횟수 (Demucs 논문: 늘릴수록 약간 향상)
+    demucs_overlap: float
 
 
-def plan_models(engine: str, mode_key: str, high_quality: bool, override: Optional[str] = None) -> dict:
+PRESETS: dict[str, Preset] = {
+    "speed": Preset("speed", "속도 우선", "Demucs 보컬 모델로 빠르게 분리합니다 (CPU 에서도 곡 길이 정도).",
+                    "demucs", 2, 1, 0.25),
+    "quality": Preset("quality", "품질 우선", "BS-RoFormer SW 로 분리합니다 (기본·권장).",
+                      "roformer", 2, 2, 0.5),
+    "best": Preset("best", "최고 품질", "구간을 4번 겹쳐 처리해 경계를 더 매끄럽게 합니다 (시간 약 2배, 차이는 작음).",
+                   "roformer", 4, 4, 0.5),
+}
+DEFAULT_PRESET = "quality"
+
+# 6-Stem(숨김 기능) 2단계 시간 이동 횟수
+SIX_SHIFTS = {False: 1, True: 2}
+
+
+def _preset(preset) -> Preset:
+    if isinstance(preset, bool):           # 이전 버전 호환: high_quality
+        return PRESETS["best" if preset else "quality"]
+    return PRESETS.get(str(preset), PRESETS[DEFAULT_PRESET])
+
+
+def resolve_engine(engine: str, preset="quality", override: Optional[str] = None) -> str:
+    if override:
+        return "roformer" if override.startswith(("roformer", "bs_roformer")) else "demucs"
+    if engine in ("roformer", "demucs"):
+        return engine
+    return _preset(preset).auto_engine
+
+
+def plan_models(engine: str, mode_key: str, preset="quality", override: Optional[str] = None) -> dict:
     """역할별 필요한 모델 이름. main = 1단계 분리, six = 6-Stem 2단계(기타·피아노)."""
-    if engine == "roformer":
+    p = _preset(preset)
+    eng = resolve_engine(engine, p.key, override)
+    if eng == "roformer":
         return {"roformer": override or "bs_roformer_sw"}
     if override == "demucs_unittest":
         plan = {"main": "demucs_unittest"}
         if mode_key == "6":
             plan["six"] = "demucs_unittest6"
         return plan
-    plan = {"main": override or ("htdemucs_ft" if high_quality else "htdemucs")}
+    if mode_key == "2":
+        return {"main": override or "htdemucs_ft_vocals"}
+    plan = {"main": override or ("htdemucs" if p.key == "speed" else "htdemucs_ft")}
     if mode_key == "6":
         plan["six"] = "htdemucs_6s"
     return plan
 
 
-def required_models(engine: str, mode_key: str, high_quality: bool, override: Optional[str] = None) -> list:
-    return list(dict.fromkeys(plan_models(engine, mode_key, high_quality, override).values()))
+def required_models(engine: str, mode_key: str, preset="quality", override: Optional[str] = None) -> list:
+    return list(dict.fromkeys(plan_models(engine, mode_key, preset, override).values()))
+
+
+MODEL_RATE = 44100        # 두 엔진 모두 44.1kHz 에서 학습·처리
 
 
 def stem_label(key: str, mode_key: str = "4") -> str:
@@ -136,6 +183,8 @@ class SeparationResult:
     notices: list[str] = field(default_factory=list)
     engine: str = "demucs"
     raw_recon_error: float = 0.0    # 모델 출력 합과 원본의 차이 (자가진단용)
+    preset: str = DEFAULT_PRESET
+    model_rate: int = MODEL_RATE    # AI 모델 출력(보컬 등) 샘플레이트
 
 
 ProgressCb = Callable[[float, str], None]
@@ -259,7 +308,8 @@ def separate(
     mode_key: str,
     out_dir: Path,
     *,
-    engine: str = "demucs",
+    engine: str = "auto",
+    preset: Optional[str] = None,
     high_quality: bool = False,
     device: str = "cpu",
     model_name: Optional[str] = None,
@@ -274,7 +324,10 @@ def separate(
     """
     t0 = time.monotonic()
     mode = MODES[mode_key]
-    plan = plan_models(engine, mode_key, high_quality, model_name)
+    p = _preset(preset if preset is not None else high_quality)
+    high_quality = p.key == "best"
+    engine = resolve_engine(engine, p.key, model_name)
+    plan = plan_models(engine, mode_key, p.key, model_name)
     cancel = cancel or threading.Event()
     notices: list[str] = []
 
@@ -287,11 +340,11 @@ def separate(
             raise SeparationCancelled()
 
     if engine == "roformer":
-        stages = [("분리 중 · BS-RoFormer", 1.0)]
+        stages = [("보컬 분리 중 · BS-RoFormer", 1.0)]
     else:
-        main_cost = 4.0 if "ft" in plan["main"] else 1.0
-        main_cost *= 2.0 if high_quality else 1.0
-        stages = [("분리 중 · 보컬/드럼/베이스", main_cost)]
+        main_cost = float(len(getattr(model_store.MODELS.get(plan["main"]), "sigs", ()) or (1,)))
+        main_cost *= p.demucs_shifts
+        stages = [("보컬 분리 중 · Demucs" if mode_key == "2" else "분리 중 · 보컬/드럼/베이스", main_cost)]
         if "six" in plan:
             stages.append(("분리 중 · 기타/피아노", 1.0 * SIX_SHIFTS[high_quality]))
     prog = _Progress(report, stages)
@@ -305,18 +358,18 @@ def separate(
         prog.device = dev
         if engine == "roformer":
             prog.stage(0)
-            raw = _run_roformer(loaded["roformer"], mix, dev, ROFORMER_OVERLAP[high_quality], cancel, prog.update)
+            raw = _run_roformer(loaded["roformer"], mix, dev, p.roformer_overlap, cancel, prog.update)
             _release(loaded["roformer"], dev)
             return raw
         prog.stage(0)
-        raw = _run_demucs(loaded["main"], mix, dev, 1, DEMUCS_OVERLAP[high_quality], cancel, prog.update)
+        raw = _run_demucs(loaded["main"], mix, dev, p.demucs_shifts, p.demucs_overlap, cancel, prog.update)
         _release(loaded["main"], dev)
         if "six" in loaded:
             # 2단계: '기타 악기' 트랙만 6-Stem 모델에 넣어 기타·피아노를 추가로 분리
             check_cancel()
             prog.stage(1)
             sub = _run_demucs(loaded["six"], raw["other"], dev, SIX_SHIFTS[high_quality],
-                              DEMUCS_OVERLAP[high_quality], cancel, prog.update)
+                              p.demucs_overlap, cancel, prog.update)
             _release(loaded["six"], dev)
             raw["guitar"] = sub.get("guitar", np.zeros_like(mix))
             raw["piano"] = sub.get("piano", np.zeros_like(mix))
@@ -380,7 +433,7 @@ def separate(
     del raw, acc, residual
     report(1.0, "완료")
     return SeparationResult(mode_key, " + ".join(dict.fromkeys(plan.values())), run_device, stems, len(mix),
-                            len(mix) / 44100.0, time.monotonic() - t0, notices, engine, recon)
+                            len(mix) / 44100.0, time.monotonic() - t0, notices, engine, recon, p.key, MODEL_RATE)
 
 
 def _release(model, device: str) -> None:

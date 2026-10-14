@@ -39,9 +39,11 @@ def parse_args(argv):
     p.add_argument("--selftest", action="store_true", help="헤드리스 자가 진단 실행 후 종료")
     p.add_argument("--report", help="자가 진단 결과 JSON 경로")
     p.add_argument("--model", help="자가 진단에 사용할 모델 (htdemucs, htdemucs_6s, demucs_unittest …)")
-    p.add_argument("--mode", default="4", choices=["2", "4", "6"])
+    p.add_argument("--mode", default="2", choices=["2", "4", "6"])
     p.add_argument("--device", default="auto", choices=["auto", "gpu", "cpu"])
-    p.add_argument("--engine", default="demucs", choices=["demucs", "roformer"])
+    p.add_argument("--engine", default="auto", choices=["auto", "demucs", "roformer"])
+    p.add_argument("--preset", default="quality", choices=["speed", "quality", "best"])
+    p.add_argument("--youtube-test", metavar="URL", help="자가 진단에서 실제 YouTube 오디오 받기 시험 (선택)")
     p.add_argument("--seconds", type=float, default=12.0, help="자가 진단 테스트 신호 길이")
     p.add_argument("--no-download", action="store_true")
     p.add_argument("--gui-smoke", metavar="PNG", help="GUI 를 띄워 분리까지 실행하고 스크린샷 저장 후 종료")
@@ -64,7 +66,8 @@ def main(argv=None) -> int:
         from .selftest import run
 
         return run(model=args.model, allow_download=not args.no_download, report=args.report,
-                   device_pref=args.device, mode=args.mode, engine_key=args.engine, seconds=args.seconds)
+                   device_pref=args.device, mode=args.mode, engine_key=args.engine, seconds=args.seconds,
+                   preset=args.preset, youtube_url=args.youtube_test)
 
     from PySide6.QtCore import QCoreApplication, QEvent, QSettings, QTimer
     from PySide6.QtGui import QIcon

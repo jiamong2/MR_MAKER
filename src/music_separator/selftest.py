@@ -1,7 +1,8 @@
 """자가 진단 (--selftest).
 
 빌드된 실행 파일이 각 OS 에서 실제로 동작하는지 CI 에서 확인하기 위한 헤드리스 테스트:
-FFmpeg 디코딩 → (모델 다운로드) → Demucs 분리 → WAV/MP3 저장 → 다시 읽어서 검증.
+FFmpeg 디코딩 → (모델 다운로드) → AI 분리 → WAV/FLAC/MP3 저장 → 다시 읽어서 검증 →
+키 변경(Rubber Band) 정확도 → 원클릭 파이프라인 → YouTube 구성 요소(yt-dlp, Deno) 확인.
 """
 from __future__ import annotations
 
@@ -42,8 +43,9 @@ def make_test_signal(seconds: float = 12.0, sr: int = 44100) -> np.ndarray:
 
 
 def run(model: Optional[str] = None, allow_download: bool = True, report: Optional[str] = None,
-        device_pref: str = "auto", mode: str = "4", engine_key: str = "demucs", seconds: float = 12.0) -> int:
-    from . import __version__, audio_io, engine, models, pitch, system
+        device_pref: str = "auto", mode: str = "2", engine_key: str = "auto", seconds: float = 12.0,
+        preset: str = "quality", youtube_url: Optional[str] = None) -> int:
+    from . import __version__, audio_io, engine, models, paths, pipeline, pitch, system, youtube
     from .export import Exporter, ExportJob, ExportOptions, ExportSource
 
     rep: dict = {"version": __version__, "platform": platform.platform(), "machine": platform.machine(),
@@ -98,7 +100,8 @@ def run(model: Optional[str] = None, allow_download: bool = True, report: Option
         dev = system.choose_device(device_pref).key
         if model and model.startswith("roformer"):
             engine_key = "roformer"
-        names = engine.required_models(engine_key, mode, False, model)
+        names = engine.required_models(engine_key, mode, preset, model)
+        engine_key = engine.resolve_engine(engine_key, preset, model)
         rep["engine"], rep["models"] = engine_key, names
         real = not any(n.endswith(("_unittest", "_unittest6")) for n in names)
 
@@ -124,7 +127,8 @@ def run(model: Optional[str] = None, allow_download: bool = True, report: Option
         mix = audio_io.decode_audio(wav_in)
 
         def separate():
-            res = engine.separate(mix, mode, work / "stems", engine=engine_key, device=dev, model_name=model)
+            res = engine.separate(mix, mode, work / "stems", engine=engine_key, preset=preset, device=dev,
+                                  model_name=model)
             stems = {s.key: np.load(s.path) for s in res.stems}
             for k, a in stems.items():
                 assert a.shape == mix.shape, f"{k} shape {a.shape}"
@@ -176,17 +180,86 @@ def run(model: Optional[str] = None, allow_download: bool = True, report: Option
 
         def key_shift():
             if not pitch.available():
-                raise RuntimeError("python-stretch 를 불러올 수 없습니다")
+                raise RuntimeError("키 변경 엔진을 불러올 수 없습니다")
+            eng = pitch.engine_name()
+            if paths.is_frozen() and eng != "Rubber Band R3":
+                raise RuntimeError(f"빌드에 rbshift(Rubber Band)가 포함되지 않았습니다 (현재: {eng})")
             sr = 44100
             t = np.arange(sr * 2) / sr
-            tone = np.stack([0.4 * np.sin(2 * np.pi * 440 * t)] * 2, 1).astype(np.float32)
-            y = pitch.shift(tone, 3, sr)
-            seg = y[sr // 2: sr + sr // 2, 0]
-            f = np.fft.rfftfreq(len(seg), 1 / sr)[np.argmax(np.abs(np.fft.rfft(seg * np.hanning(len(seg)))))]
-            assert abs(f - 440 * 2 ** (3 / 12)) < 3, f"pitch shift wrong: {f:.1f}Hz"
-            assert len(y) == len(tone)
-            return {"440Hz +3 ->": round(float(f), 1)}
+            tone = np.stack([sum(0.3 / h * np.sin(2 * np.pi * 220 * h * t) for h in range(1, 6))] * 2,
+                            1).astype(np.float32)
+            assert np.array_equal(pitch.shift(tone, 0, sr), tone), "0 반음은 원본 그대로여야 함"
+            out = {"engine": eng}
+            for k in (2, -3, 12, -12):
+                y = pitch.shift(tone, k, sr)
+                assert len(y) == len(tone), "길이가 바뀜"
+                target = 220 * 2 ** (k / 12)
+                seg = y[sr // 2: sr + sr // 2, 0].astype(np.float64)
+                n = 16 * len(seg)
+                spec = np.abs(np.fft.rfft(seg * np.blackman(len(seg)), n))
+                fr = np.fft.rfftfreq(n, 1 / sr)
+                band = np.where((fr > target * 0.95) & (fr < target * 1.05))[0]
+                cents = 1200 * np.log2(fr[band[np.argmax(spec[band])]] / target)
+                limit = 3 if eng == "Rubber Band R3" else 40
+                assert abs(cents) < limit, f"{k:+d} 반음 음정 오차 {cents:.1f}센트"
+                out[f"{k:+d}"] = f"{cents:+.1f} cents"
+            if eng == "Rubber Band R3":
+                y = pitch.shift(tone, 3, sr, formant=True)
+                assert len(y) == len(tone) and np.isfinite(y).all()
+            return out
         check("key_shift", key_shift)
+
+        def one_click():
+            src = work / "원클릭 입력.wav"
+            audio_io.write_wav(src, audio_io.resample(sig, 44100, 48000) * 0.9, 24, 48000)
+            spec = pipeline.JobSpec(str(src), work / "oneclick", target="both", fmt="wav32f", preset=preset,
+                                    engine=engine_key, device=dev, model_override=model, allow_download=False)
+            r = pipeline.Pipeline(spec, work / "pipe").run()
+            outs = {Path(o["file"]).name: o for o in r.report["outputs"]}
+            mr = next(o for n, o in outs.items() if "MR" in n)
+            voc = next(o for n, o in outs.items() if "보컬" in n)
+            assert mr["sample_rate"] == 48000 and voc["sample_rate"] == 44100, outs
+            native = audio_io.decode_audio(src, None)
+            mr_a = audio_io.decode_audio(Path(mr["file"]), None)
+            voc_a = audio_io.decode_audio(Path(voc["file"]), None)
+            err = float(np.max(np.abs(mr_a - (native - audio_io.resample(voc_a, 44100, 48000)))))
+            assert err < 1e-4, f"MR != 원본 - 보컬 ({err})"
+            m3 = pipeline.JobSpec(str(src), work / "oneclick_mp3", target="mr", fmt="mp3", preset=preset,
+                                  engine=engine_key, device=dev, model_override=model, semitones=2)
+            r2 = pipeline.Pipeline(m3, work / "pipe").run(r.prepared, r.separation,
+                                                          pipeline.Pipeline(spec, work / "pipe")
+                                                          .separation_key(r.prepared))
+            v = r2.report["outputs"][0]
+            assert "320kbps" in v["verified"] and v["semitones"] == 2 and r2.reused_separation, v
+            return {"mr_identity_err": err, "mp3": v["verified"], "resample_steps": r.report["decode"]["resample_steps"]}
+        check("one_click", one_click)
+
+        def youtube_parts():
+            yt = youtube.load_ytdlp()
+            deno = youtube.find_deno()
+            out = {"yt_dlp": yt.version.__version__, "deno": deno}
+            if paths.is_frozen() and not deno:
+                raise RuntimeError("빌드에 deno 가 포함되지 않았습니다")
+            if deno:
+                import subprocess
+
+                kw = {"creationflags": 0x08000000} if sys.platform == "win32" else {}
+                v = subprocess.run([deno, "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   timeout=60, **kw)
+                out["deno_version"] = v.stdout.decode("utf-8", "replace").splitlines()[0] if v.stdout else \
+                    f"실행 실패 {v.returncode}"
+            import yt_dlp_ejs  # noqa: F401  (챌린지 해석 스크립트 포함 여부)
+            return out
+        check("youtube_parts", youtube_parts)
+
+        if youtube_url:
+            def youtube_online():
+                a = youtube.acquire(youtube_url, work / "yt")
+                info = audio_io.probe_audio(a.path)
+                return {"format_id": a.format_id, "codec": a.codec, "abr": a.abr_kbps, "asr": a.sample_rate,
+                        "audio_only": a.audio_only, "container": a.container, "probe": info.summary(),
+                        "reason": a.reason, "license": a.license}
+            check("youtube_online", youtube_online, critical=False)
 
         def audio_device():
             import sounddevice as sd
