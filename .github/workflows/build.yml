@@ -10,11 +10,13 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    paths-ignore: ["**.md", "docs/**", ".github/workflows/evaluate.yml", "scripts/evaluate_separation.py",
+                   "scripts/quality_report.py"]
   pull_request:
   workflow_dispatch:
     inputs:
       bundle_models:
-        description: "AI 모델(htdemucs, htdemucs_6s)을 설치 파일에 포함 (오프라인 즉시 사용)"
+        description: "AI 모델(htdemucs_ft 보컬 모델)을 설치 파일에 포함 (오프라인 즉시 사용)"
         type: boolean
         default: true
       build_cuda:
@@ -57,6 +59,11 @@ jobs:
           pip install -r requirements/common.txt -r requirements/dev.txt
           pip install --no-deps -r requirements/demucs.txt
           sudo apt-get update && sudo apt-get install -y libegl1 libxkbcommon0 libportaudio2
+      - name: Build key-change tool (Rubber Band, native/rbshift)
+        run: |
+          cmake -S native/rbshift -B build/rbshift -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/rbshift --parallel
+          build/rbshift/rbshift --version
       - name: Unit tests
         run: |
           set -o pipefail
@@ -66,12 +73,10 @@ jobs:
         run: |
           grep -E "^(FAILED|ERROR)|Error:|assert" pytest.log | head -10 | while IFS= read -r l; do echo "::error::$l"; done
           tail -40 pytest.log | tr '\n' '|' | cut -c1-3500 | sed 's/^/::error title=pytest tail::/'
-      - name: GUI smoke test (offscreen, 4-Stem / 6-Stem + 키 조절)
+      - name: GUI smoke test (offscreen, 홈 원클릭 + 고급 옵션)
         env:
           QT_QPA_PLATFORM: offscreen
-        run: |
-          python run.py --gui-smoke smoke-linux.png
-          MUSIC_SEPARATOR_SMOKE_MODE=6 python run.py --gui-smoke smoke-linux-6.png
+        run: python run.py --gui-smoke smoke-linux.png
       # 고급 엔진(BS-RoFormer SW): 실제 가중치 다운로드(URL·SHA256) + 로드 + 분리 품질까지 확인
       - uses: actions/cache@v6
         with:
@@ -80,7 +85,10 @@ jobs:
       - name: Advanced engine selftest (BS-RoFormer SW, CPU)
         env:
           MUSIC_SEPARATOR_DATA_DIR: ${{ github.workspace }}/.msdata
-        run: python run.py --selftest --engine roformer --mode 6 --seconds 6 --report selftest-roformer.json
+        run: python run.py --selftest --engine roformer --seconds 6 --report selftest-roformer.json
+      - name: YouTube audio check (CC-BY 영상, 실패해도 빌드는 계속)
+        continue-on-error: true
+        run: python scripts/youtube_check.py --annotate
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -88,6 +96,7 @@ jobs:
           path: |
             smoke-linux*
             selftest-roformer.json
+            youtube_check.json
           retention-days: 7
 
   # ------------------------------------------------------------ AI 모델 준비
@@ -102,14 +111,14 @@ jobs:
         id: cache
         with:
           path: build/models
-          key: demucs-models-v1-htdemucs-htdemucs_6s
+          key: demucs-models-v2-htdemucs_ft_vocals
       - name: Download models
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements/common.txt
           pip install --no-deps -r requirements/demucs.txt
-          python scripts/fetch_models.py build/models htdemucs htdemucs_6s
+          python scripts/fetch_models.py build/models htdemucs_ft_vocals
       - run: ls -laR build/models
       - uses: actions/upload-artifact@v7
         with:
@@ -235,13 +244,13 @@ jobs:
         shell: pwsh
         run: |
           $exe = "dist\MRMaker\MRMaker.exe"
-          $st = @("--selftest", "--mode", "6", "--report", "selftest-${{ matrix.name }}.json")
+          $st = @("--selftest", "--preset", "speed", "--report", "selftest-${{ matrix.name }}.json")
           if ($env:BUNDLE_MODELS -eq 'true') { $st += "--no-download" }
           $p = Start-Process $exe -ArgumentList $st -Wait -PassThru -NoNewWindow
           Get-Content "selftest-${{ matrix.name }}.json"
           if ($p.ExitCode -ne 0) { throw "selftest failed ($($p.ExitCode))" }
           # 고급 엔진 코드 경로(번들 포함 여부) - 초소형 RoFormer 로 확인
-          $p = Start-Process $exe -ArgumentList "--selftest","--model","roformer_unittest","--mode","6","--seconds","6","--report","selftest-roformer-${{ matrix.name }}.json" -Wait -PassThru -NoNewWindow
+          $p = Start-Process $exe -ArgumentList "--selftest","--model","roformer_unittest","--seconds","6","--report","selftest-roformer-${{ matrix.name }}.json" -Wait -PassThru -NoNewWindow
           Get-Content "selftest-roformer-${{ matrix.name }}.json"
           if ($p.ExitCode -ne 0) { throw "roformer selftest failed ($($p.ExitCode))" }
           $p = Start-Process $exe -ArgumentList "--gui-smoke","smoke-${{ matrix.name }}.png" -Wait -PassThru
@@ -264,8 +273,8 @@ jobs:
           APP=$(ls -d dist/*.app | head -1); NAME=$(basename "$APP")
           BIN="$APP/Contents/MacOS/MRMaker"
           DL=""; [ "$BUNDLE_MODELS" = "true" ] && DL="--no-download"
-          "$BIN" --selftest --mode 6 --report "selftest-${{ matrix.name }}.json" $DL
-          "$BIN" --selftest --model roformer_unittest --mode 6 --seconds 6 --report "selftest-roformer-${{ matrix.name }}.json"
+          "$BIN" --selftest --preset speed --report "selftest-${{ matrix.name }}.json" $DL
+          "$BIN" --selftest --model roformer_unittest --seconds 6 --report "selftest-roformer-${{ matrix.name }}.json"
           "$BIN" --gui-smoke "smoke-${{ matrix.name }}.png"
           cat "smoke-${{ matrix.name }}.json"
           # DMG 를 마운트해서 그 안의 앱이 실행되는지 확인

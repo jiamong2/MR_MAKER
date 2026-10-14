@@ -69,6 +69,14 @@ MODELS: dict[str, ModelSpec] = {
         "models: ['f7e0c4bc', 'd12395a8', '92cfc3b6', '04573f0d']\n"
         "weights: [\n  [1., 0., 0., 0.],\n  [0., 1., 0., 0.],\n  [0., 0., 1., 0.],\n  [0., 0., 0., 1.],\n]\n",
     ),
+    # htdemucs_ft 의 보컬 전용 하위 모델 1개 (2-Stem 속도 우선 모드). htdemucs_ft 의 다른 3개 모델은
+    # 각각 드럼/베이스/기타 전용이라 보컬·반주 분리에는 필요 없음 → 계산량 1/4, 보컬 품질은 동일.
+    "htdemucs_ft_vocals": ModelSpec(
+        "htdemucs_ft_vocals", "Hybrid Transformer Demucs Fine-tuned (보컬 전용)", "HTDemucs-ft",
+        ("04573f0d",), ("04573f0d-f3cf25b2.th",), 80,
+        ("drums", "bass", "other", "vocals"),
+        "models: ['04573f0d']\n",
+    ),
     "htdemucs_6s": ModelSpec(
         "htdemucs_6s", "Hybrid Transformer Demucs 6-Source (실험적)", "HTDemucs-6s",
         ("5c90dfd2",), ("5c90dfd2-34c22ccb.th",), 55,
@@ -128,13 +136,18 @@ def _installed_in(folder: Path, spec: ModelSpec) -> bool:
     return all(_sig_file(folder, s) for s in spec.sigs)
 
 
+# 같은 가중치 파일을 다른 모델 폴더에서도 찾음 (예: htdemucs_ft 를 이미 받았으면 보컬 전용 모델도 있는 것)
+ALT_DIRS = {"htdemucs_ft_vocals": ("htdemucs_ft",)}
+
+
 def find_model_dir(name: str) -> Optional[Path]:
     if name not in MODELS:   # 테스트용 내장 모델
         return Path(".") if name.endswith("_unittest") or name.endswith("_unittest6") else None
     spec = MODELS[name]
     for root in search_dirs():
-        if _installed_in(root / name, spec):
-            return root / name
+        for sub in (name, *ALT_DIRS.get(name, ())):
+            if _installed_in(root / sub, spec):
+                return root / sub
     return None
 
 

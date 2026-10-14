@@ -1,4 +1,6 @@
-"""디자인 시스템: 밝은 화이트 테마 색상, 폰트(Pretendard), 스타일시트."""
+"""디자인 시스템: 화이트·아이보리 배경 + 세이지 그린 포인트, 폰트(Pretendard), 스타일시트.
+
+과도한 그라데이션 없이 단색 면과 은은한 그림자만 사용합니다."""
 from __future__ import annotations
 
 import logging
@@ -9,27 +11,28 @@ from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
 log = logging.getLogger(__name__)
 
 # ---- 색상 (은은한 흰색 계열) -------------------------------------------------
-BG = "#f3f5f9"            # 창 배경 (아주 옅은 회청색)
+BG = "#f6f6f1"            # 창 배경 (옅은 아이보리)
 SURFACE = "#ffffff"       # 카드/패널
-SURFACE_2 = "#f7f9fc"     # 카드 안쪽 박스
-SURFACE_3 = "#f1f4f8"     # 버튼, 입력칸
+SURFACE_2 = "#f9faf7"     # 카드 안쪽 박스
+SURFACE_3 = "#f2f4ef"     # 버튼, 입력칸
 TRACK_PANEL = "#ffffff"   # 트랙/타임라인 패널
-BORDER = "#e4e8ef"
-BORDER_2 = "#d9dee7"
-TEXT = "#1d2433"
-TEXT_DIM = "#687083"
-TEXT_FAINT = "#9aa1b0"
-ACCENT = "#3478f6"
-ACCENT_2 = "#2f6ee8"
-ACCENT_SOFT = "#eaf2ff"
+BORDER = "#e6e9e3"
+BORDER_2 = "#d9ded6"
+TEXT = "#1f2723"
+TEXT_DIM = "#65706a"
+TEXT_FAINT = "#9aa39d"
+ACCENT = "#4a9686"        # 세이지 그린 (포인트)
+ACCENT_2 = "#3d8476"      # 눌림/호버
+ACCENT_SOFT = "#eaf4f1"   # 선택 배경
+ACCENT_SOFT_2 = "#d5ebe4"
 DANGER = "#e5484d"
 DANGER_SOFT = "#fff1f2"
 SUCCESS = "#22a55b"
 WARN = "#d9822b"
-MUTE_ON = "#3478f6"
+MUTE_ON = "#4a9686"
 SOLO_ON = "#f5b400"
-TOGGLE_OFF = "#d6dce6"
-SHADOW = "#1d2433"
+TOGGLE_OFF = "#d6dbd3"
+SHADOW = "#1f2723"
 
 FONT_FAMILY = "Pretendard"
 
@@ -135,14 +138,17 @@ QFrame#Lcd {{ background: {SURFACE_2}; border: 1px solid {BORDER}; border-radius
 /* 버튼 */
 QPushButton {{ background: {SURFACE}; color: {TEXT}; border: 1px solid {BORDER_2}; border-radius: 10px;
               padding: 8px 14px; font-size: 13px; font-weight: 500; }}
-QPushButton:hover {{ background: {SURFACE_2}; border-color: #c9d0dc; }}
+QPushButton:hover {{ background: {SURFACE_2}; border-color: #c8cfc5; }}
 QPushButton:pressed {{ background: {SURFACE_3}; }}
 QPushButton:disabled {{ color: {TEXT_FAINT}; background: {SURFACE_2}; border-color: {BORDER}; }}
-QPushButton[kind="primary"] {{ color: white; font-weight: 600; border: 1px solid #2f6ee8;
-    background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #4b8bff, stop:1 #2f6ee8); }}
-QPushButton[kind="primary"]:hover {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #5a96ff, stop:1 #3a78f2); }}
-QPushButton[kind="primary"]:pressed {{ background: #2a63d6; }}
-QPushButton[kind="primary"]:disabled {{ background: #c9d9f7; border-color: #c9d9f7; color: #ffffff; }}
+QPushButton[kind="primary"] {{ color: white; font-weight: 600; border: 1px solid {ACCENT}; background: {ACCENT}; }}
+QPushButton[kind="primary"]:hover {{ background: #529f8f; border-color: #529f8f; }}
+QPushButton[kind="primary"]:pressed {{ background: {ACCENT_2}; border-color: {ACCENT_2}; }}
+QPushButton[kind="primary"]:disabled {{ background: #bcd8d1; border-color: #bcd8d1; color: #ffffff; }}
+QPushButton[kind="soft"] {{ background: {ACCENT_SOFT}; border: 1px solid {ACCENT_SOFT_2}; color: #2f6f62; font-weight: 600; }}
+QPushButton[kind="soft"]:hover {{ background: {ACCENT_SOFT_2}; }}
+QPushButton[kind="link"] {{ background: transparent; border: none; color: {TEXT_DIM}; font-size: 14px; padding: 6px 8px; }}
+QPushButton[kind="link"]:hover {{ color: {TEXT}; background: {SURFACE_3}; }}
 QPushButton[kind="danger"] {{ background: {DANGER_SOFT}; border-color: #f3b4b8; color: {DANGER}; }}
 QPushButton[kind="danger"]:hover {{ background: #ffe5e7; }}
 QPushButton[kind="square"] {{ padding: 0; border-radius: 12px; }}
@@ -160,7 +166,7 @@ QLabel#KeyValue {{ font-size: 26px; font-weight: 800; color: {TEXT}; }}
 
 QComboBox {{ background: {SURFACE}; border: 1px solid {BORDER_2}; border-radius: 10px; padding: 8px 12px;
             color: {TEXT}; font-size: 13px; min-height: 22px; }}
-QComboBox:hover {{ border-color: #c3cad6; }}
+QComboBox:hover {{ border-color: #c3cbc0; }}
 QComboBox:disabled {{ color: {TEXT_FAINT}; background: {SURFACE_2}; }}
 QComboBox::drop-down {{ border: none; width: 28px; }}
 QComboBox::down-arrow {{ image: url("@CHEVRON@"); width: 14px; height: 14px; }}
@@ -169,26 +175,25 @@ QComboBox QAbstractItemView {{ background: {SURFACE}; border: 1px solid {BORDER_
                               outline: 0; padding: 4px; }}
 QCheckBox {{ color: {TEXT}; spacing: 9px; font-size: 13px; }}
 QCheckBox:disabled {{ color: {TEXT_FAINT}; }}
-QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 5px; border: 1px solid #c3cad6; background: #ffffff; }}
+QCheckBox::indicator {{ width: 18px; height: 18px; border-radius: 5px; border: 1px solid #c3cbc0; background: #ffffff; }}
 QCheckBox::indicator:checked {{ background: {ACCENT}; border-color: {ACCENT}; image: url("@CHECK@"); }}
 
-QSlider::groove:horizontal {{ height: 4px; background: #e3e7ee; border-radius: 2px; }}
+QSlider::groove:horizontal {{ height: 4px; background: #e3e7e1; border-radius: 2px; }}
 QSlider::sub-page:horizontal {{ background: {ACCENT}; border-radius: 2px; }}
 QSlider::handle:horizontal {{ width: 10px; margin: -5px 0; border-radius: 7px; background: #ffffff;
                              border: 2px solid {ACCENT}; }}
-QSlider::groove:horizontal:disabled {{ background: #eceff4; }}
-QSlider::sub-page:horizontal:disabled {{ background: #c9d0dc; }}
-QSlider::handle:horizontal:disabled {{ border-color: #c9d0dc; }}
+QSlider::groove:horizontal:disabled {{ background: #edf0eb; }}
+QSlider::sub-page:horizontal:disabled {{ background: #c8cfc5; }}
+QSlider::handle:horizontal:disabled {{ border-color: #c8cfc5; }}
 QSlider#Seek::handle:horizontal {{ border: 2px solid {ACCENT}; width: 12px; margin: -6px 0; border-radius: 8px; }}
 
-QProgressBar {{ background: #edf1f6; border: none; border-radius: 4px; height: 8px; color: transparent; }}
-QProgressBar::chunk {{ border-radius: 4px;
-    background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #3478f6, stop:1 #6aa6ff); }}
+QProgressBar {{ background: #e9eee8; border: none; border-radius: 4px; height: 8px; color: transparent; }}
+QProgressBar::chunk {{ border-radius: 4px; background: {ACCENT}; }}
 
 QScrollBar:vertical {{ background: transparent; width: 8px; margin: 2px; }}
-QScrollBar::handle:vertical {{ background: #d3d9e3; border-radius: 3px; min-height: 30px; }}
+QScrollBar::handle:vertical {{ background: #d3d9d1; border-radius: 3px; min-height: 30px; }}
 QScrollBar:horizontal {{ background: transparent; height: 8px; margin: 2px; }}
-QScrollBar::handle:horizontal {{ background: #d3d9e3; border-radius: 3px; min-width: 30px; }}
+QScrollBar::handle:horizontal {{ background: #d3d9d1; border-radius: 3px; min-width: 30px; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 
@@ -198,8 +203,8 @@ QLabel#TrackNum {{ color: {TEXT_FAINT}; font-size: 13px; font-weight: 600; }}
 QLabel#TrackName {{ font-size: 15px; font-weight: 700; }}
 QLabel#TrackSub {{ color: {TEXT_DIM}; font-size: 12px; }}
 QPushButton#MuteBtn, QPushButton#SoloBtn {{ background: {SURFACE_3}; border: 1px solid {BORDER}; border-radius: 6px;
-    padding: 0; font-size: 12px; font-weight: 600; color: #5b6475; }}
-QPushButton#MuteBtn:hover, QPushButton#SoloBtn:hover {{ background: #e8ecf2; }}
+    padding: 0; font-size: 12px; font-weight: 600; color: #5b6560; }}
+QPushButton#MuteBtn:hover, QPushButton#SoloBtn:hover {{ background: #e8ece6; }}
 QPushButton#MuteBtn:checked {{ background: {MUTE_ON}; border-color: {MUTE_ON}; color: white; }}
 QPushButton#SoloBtn:checked {{ background: {SOLO_ON}; border-color: {SOLO_ON}; color: #3a2a00; }}
 QLabel#Gain {{ color: {TEXT_DIM}; font-size: 12px; }}
@@ -216,7 +221,37 @@ QMenu::item:selected {{ background: {ACCENT_SOFT}; color: {TEXT}; }}
 QMenu::separator {{ height: 1px; background: {BORDER}; margin: 5px 8px; }}
 QMenuBar {{ background: {SURFACE}; color: {TEXT}; }}
 QMessageBox, QDialog {{ background: {SURFACE}; }}
-QLineEdit {{ background: #ffffff; border: 1px solid {BORDER_2}; border-radius: 8px; padding: 7px 10px; color: {TEXT}; }}
+QLineEdit {{ background: #ffffff; border: 1px solid {BORDER_2}; border-radius: 8px; padding: 7px 10px; color: {TEXT};
+             selection-background-color: {ACCENT_SOFT_2}; selection-color: {TEXT}; }}
+QLineEdit:focus {{ border-color: {ACCENT}; }}
+
+/* 홈 화면 */
+QWidget#HomeRoot {{ background: {BG}; }}
+QWidget#HomeTop {{ background: transparent; }}
+QFrame#HomeCard {{ background: {SURFACE}; border: 1px solid {BORDER}; border-radius: 22px; }}
+QLabel#HomeTitle {{ font-size: 30px; font-weight: 800; color: {TEXT}; }}
+QLabel#HomeSub {{ font-size: 15px; color: {TEXT_DIM}; }}
+QLabel#HomeSection {{ font-size: 16px; font-weight: 700; color: {TEXT}; }}
+QLabel#HomeHint {{ font-size: 13px; color: {TEXT_FAINT}; }}
+QLabel#HomeFoot {{ font-size: 12px; color: {TEXT_FAINT}; }}
+QLineEdit#UrlEdit {{ font-size: 15px; padding: 12px 14px; border-radius: 12px; }}
+QLineEdit#UrlEdit[active="true"] {{ border: 2px solid {ACCENT}; padding: 11px 13px; background: #fbfdfc; }}
+QLineEdit#UrlEdit[invalid="true"] {{ border: 2px solid #e8a0a3; padding: 11px 13px; }}
+QPushButton#StartBtn {{ font-size: 18px; font-weight: 700; border-radius: 14px; }}
+QFrame#StatusPanel {{ background: {SURFACE_2}; border: 1px solid {BORDER}; border-radius: 16px; }}
+QFrame#ResultPanel {{ background: {ACCENT_SOFT}; border: 1px solid {ACCENT_SOFT_2}; border-radius: 16px; }}
+QFrame#ErrorPanel {{ background: {DANGER_SOFT}; border: 1px solid #f3c2c5; border-radius: 16px; }}
+QLabel#ResultTitle {{ font-size: 17px; font-weight: 700; color: #2b6a5d; }}
+QLabel#ErrorTitle {{ font-size: 16px; font-weight: 700; color: #b4363b; }}
+QLabel#StageDone {{ color: {ACCENT_2}; font-size: 12px; font-weight: 600; }}
+QLabel#StageActive {{ color: {TEXT}; font-size: 12px; font-weight: 700; }}
+QLabel#StageTodo {{ color: {TEXT_FAINT}; font-size: 12px; }}
+QLabel#ActiveBadge {{ background: {ACCENT_SOFT}; color: #2f6f62; border-radius: 10px; padding: 3px 10px;
+                     font-size: 12px; font-weight: 600; }}
+QLabel#SegLabel {{ font-size: 13px; }}
+QPushButton[kind="seg"] {{ background: {SURFACE}; border: 1px solid {BORDER_2}; border-radius: 10px; padding: 8px 6px;
+                          font-size: 13px; color: {TEXT_DIM}; }}
+QPushButton[kind="seg"]:checked {{ background: {ACCENT_SOFT}; border: 1.5px solid {ACCENT}; color: #2f6f62; font-weight: 700; }}
 """
 
 

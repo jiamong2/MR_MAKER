@@ -28,6 +28,25 @@ datas += collect_data_files("demucs", includes=["remote/*.yaml", "remote/*.txt"]
 datas += collect_data_files("imageio_ffmpeg", subdir="binaries")
 datas += collect_data_files("certifi")
 
+# 별도 실행 파일: 키 조절(rbshift, Rubber Band) / YouTube JavaScript 엔진(deno)
+binaries = []
+_exe = ".exe" if IS_WIN else ""
+for cand in (ROOT / "build" / "rbshift" / f"rbshift{_exe}", ROOT / "build" / "rbshift" / "Release" / f"rbshift{_exe}"):
+    if cand.is_file():
+        binaries.append((str(cand), "bin"))
+        print(f"[spec] bundling {cand}")
+        break
+else:
+    print("[spec] WARNING: rbshift 가 없어 키 조절은 Signalsmith 로 대체됩니다 (scripts/build.py 가 먼저 빌드)")
+try:
+    import deno as _deno
+
+    _d = Path(_deno.find_deno_bin())
+    binaries.append((str(_d), "bin"))
+    print(f"[spec] bundling deno {_d}")
+except Exception as _exc:  # noqa: BLE001
+    print(f"[spec] WARNING: deno 를 찾지 못함 ({_exc}) — YouTube 는 JavaScript 엔진 없이 동작 (일부 실패 가능)")
+
 models_dir = os.environ.get("MS_BUNDLE_MODELS")
 if models_dir and Path(models_dir).is_dir():
     for sub in Path(models_dir).iterdir():
@@ -42,7 +61,10 @@ hiddenimports = collect_submodules("demucs", filter=lambda n: n.split(".")[-1] n
 hiddenimports += ["safetensors", "safetensors.torch", "yaml", "lameenc", "imageio_ffmpeg",
                   "sounddevice", "psutil", "certifi", "truststore", "music_separator.smoke",
                   "music_separator.selftest", "music_separator.roformer", "music_separator.pitch",
-                  "music_separator.export", "python_stretch", "python_stretch.Signalsmith", "julius"]
+                  "music_separator.export", "music_separator.pipeline", "music_separator.youtube",
+                  "music_separator.ui.home", "python_stretch", "python_stretch.Signalsmith", "julius",
+                  "soxr", "yt_dlp"]
+hiddenimports += collect_submodules("yt_dlp_ejs")
 
 excludes = [
     "tkinter", "matplotlib", "IPython", "jupyter", "notebook", "pytest", "torchaudio", "torchvision",
@@ -56,7 +78,7 @@ excludes = [
 a = Analysis(  # noqa: F821
     [str(ROOT / "run.py")],
     pathex=[str(ROOT / "src")],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

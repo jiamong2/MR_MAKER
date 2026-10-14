@@ -1,8 +1,8 @@
 """AI 모델을 미리 내려받아 빌드에 포함(번들)하거나 오프라인 PC 로 옮길 때 사용합니다.
 
 사용:
-  python scripts/fetch_models.py build/models                 # htdemucs + htdemucs_6s (기본, 약 135MB)
-  python scripts/fetch_models.py build/models htdemucs_ft      # 고품질 모델(약 320MB) 추가
+  python scripts/fetch_models.py build/models                       # htdemucs_ft_vocals (기본, 약 80MB)
+  python scripts/fetch_models.py build/models bs_roformer_sw        # 최고 품질 모델(약 667MB)
 
 만들어진 폴더를
   - 빌드에 포함:  MS_BUNDLE_MODELS=build/models pyinstaller packaging/music_separator.spec
@@ -25,7 +25,7 @@ def main() -> int:
         print(__doc__)
         return 2
     target = Path(sys.argv[1]).resolve()
-    names = sys.argv[2:] or ["htdemucs", "htdemucs_6s"]
+    names = sys.argv[2:] or ["htdemucs_ft_vocals"]
     # 사용자 데이터 폴더를 target 의 부모로 돌려 models/<name> 구조로 저장
     staging = target.parent / (target.name + ".staging")
     os.environ["MUSIC_SEPARATOR_DATA_DIR"] = str(staging)
@@ -34,7 +34,7 @@ def main() -> int:
 
     target.mkdir(parents=True, exist_ok=True)
     for name in names:
-        if (target / name).is_dir() and all(models._sig_file(target / name, s) for s in models.MODELS[name].sigs):
+        if models._installed_in(target / name, models.MODELS[name]):
             print(f"{name}: already present")
             continue
         last = [0.0]
@@ -56,7 +56,7 @@ def main() -> int:
     models.clear_cache()
     for name in names:
         m = models.load_model(name)
-        print(f"verified {name}: sources={list(m.sources)}")
+        print(f"verified {name}: sources={list(getattr(m, 'sources', None) or getattr(m, 'instruments', []))}")
     return 0
 
 

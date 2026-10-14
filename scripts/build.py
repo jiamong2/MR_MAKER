@@ -35,6 +35,21 @@ def run(cmd, **kw):
     subprocess.run([str(c) for c in cmd], check=True, **kw)
 
 
+def build_rbshift() -> Path:
+    """키 조절 도구(Rubber Band, native/rbshift) 컴파일 → build/rbshift."""
+    out = ROOT / "build" / "rbshift"
+    arch = os.environ.get("MS_TARGET_ARCH")
+    extra = [f"-DCMAKE_OSX_ARCHITECTURES={arch}"] if sys.platform == "darwin" and arch else []
+    run(["cmake", "-S", ROOT / "native" / "rbshift", "-B", out, "-DCMAKE_BUILD_TYPE=Release", *extra])
+    run(["cmake", "--build", out, "--config", "Release", "--parallel"])
+    exe = "rbshift.exe" if sys.platform == "win32" else "rbshift"
+    for cand in (out / exe, out / "Release" / exe):
+        if cand.is_file():
+            run([cand, "--version"])
+            return cand
+    raise SystemExit("rbshift 빌드 결과를 찾지 못했습니다")
+
+
 def pyinstaller(bundle_models: str | None):
     env = dict(os.environ)
     if bundle_models:
@@ -101,8 +116,9 @@ def package_macos():
     arch = os.environ.get("MS_TARGET_ARCH") or platform.machine()
     dmg = RELEASE / f"{EXE_NAME}-{__version__}-macos-{arch}.dmg"
     # 데이터로 포함된 ffmpeg 에 실행 권한 보장
-    for f in app.rglob("ffmpeg-*"):
-        f.chmod(0o755)
+    for f in list(app.rglob("ffmpeg-*")) + list(app.rglob("rbshift")) + list(app.rglob("deno")):
+        if f.is_file():
+            f.chmod(0o755)
     if os.environ.get("MS_CODESIGN_ID"):
         run(["bash", ROOT / "packaging" / "macos" / "sign_and_notarize.sh", app, dmg])
     else:
@@ -125,9 +141,12 @@ def main():
     ap.add_argument("--variant", default=os.environ.get("MS_VARIANT", "cpu"), help="Windows: cpu / cuda")
     ap.add_argument("--skip-installer", action="store_true")
     ap.add_argument("--skip-pyinstaller", action="store_true")
+    ap.add_argument("--skip-rbshift", action="store_true", help="키 조절 도구 빌드 생략 (이미 빌드됨)")
     a = ap.parse_args()
     RELEASE.mkdir(parents=True, exist_ok=True)
     if not a.skip_pyinstaller:
+        if not a.skip_rbshift:
+            build_rbshift()
         pyinstaller(a.bundle_models)
     if sys.platform == "win32":
         package_windows(a.variant, a.skip_installer)

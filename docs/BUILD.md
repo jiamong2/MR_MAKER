@@ -21,37 +21,39 @@ music-separator/
 ├─ run.py                         진입점 (소스 실행 / PyInstaller 공용)
 ├─ src/music_separator/
 │  ├─ app.py                      앱 시작, 로깅, 명령행 옵션(--selftest, --gui-smoke)
-│  ├─ engine.py                   분리 엔진: 모드·엔진 정의, Demucs 2단계 6-Stem, 잔차 트랙, GPU→CPU 폴백, 진행률, 취소
-│  ├─ roformer.py                 고급 엔진 BS-RoFormer 구현(SW 가중치 호환) + 겹침 청크 처리
+│  ├─ pipeline.py                 홈 화면 원클릭 파이프라인: 입력 확인 → (YouTube) → 디코딩 → 분리 → 키 → 1회 인코딩
+│  ├─ youtube.py                  YouTube 오디오 획득 (yt-dlp): 스트림 선택 규칙, 원본 그대로 저장, 오류 메시지, 업데이트
+│  ├─ engine.py                   분리 엔진: 2-Stem(보컬 추정 + 반주 = 원본 − 보컬), 처리 방식(속도/품질/최고), GPU→CPU 폴백
+│  ├─ roformer.py                 BS-RoFormer 구현(SW 가중치 호환) + 겹침 청크 처리
 │  ├─ models.py                   모델 탐색/다운로드(HuggingFace → Meta 서버, RoFormer 는 GitHub + SHA256)/로드/캐시
-│  ├─ audio_io.py                 FFmpeg 디코딩, 리샘플, WAV 16/24/32f · FLAC · MP3 저장
-│  ├─ export.py                   저장 계산: 원본 − 뺀 트랙(MR), 원본 샘플레이트, 키 조절, 클리핑 방지
-│  ├─ pitch.py                    키 조절(Signalsmith Stretch, python-stretch)
+│  ├─ audio_io.py                 FFmpeg 디코딩(원본 샘플레이트), soxr 리샘플, WAV 16/24/32f · FLAC · MP3 저장, 트루 피크
+│  ├─ export.py                   저장 계산: MR = 원본 − 보컬, 샘플레이트 규칙, 키 조절 1회, 피크 처리(고정 배율)
+│  ├─ pitch.py                    키 조절: rbshift(Rubber Band R3) 별도 프로세스, 없으면 Signalsmith Stretch
 │  ├─ player.py                   멀티트랙 믹서(뮤트/솔로/볼륨) + sounddevice 재생
-│  ├─ dsp.py                      파형 피크 계산, 믹스다운(MR)
-│  ├─ system.py                   GPU 감지, 메모리/디스크 요구량 계산
-│  ├─ paths.py                    OS 별 데이터/캐시/리소스 경로
+│  ├─ dsp.py · system.py · paths.py   파형 피크, GPU/메모리/디스크 확인, OS 별 경로
 │  ├─ selftest.py / smoke.py      빌드 결과물 자동 검증 (CI 에서 사용)
-│  └─ ui/                         PySide6 화면 (main_window, widgets, workers, theme, clover = 아이콘 벡터 그림)
+│  └─ ui/                         PySide6 화면: home(홈 화면), main_window(고급 옵션), widgets, workers, theme, clover
+├─ native/rbshift/                키 조절 도구 소스 (Rubber Band Library 4.0 포함, GPL-2.0-or-later, CMake 로 빌드)
 ├─ tests/                         pytest 테스트 (GPU·인터넷·오디오 장치 없이 실행)
 ├─ requirements/                  플랫폼별 의존성 (torch 는 OS 마다 다름)
-├─ packaging/
-│  ├─ music_separator.spec        PyInstaller 설정
-│  ├─ windows/installer.iss       Inno Setup 설치 프로그램
-│  └─ macos/                      DMG 생성, 서명·공증 스크립트, entitlements
+├─ packaging/                     PyInstaller spec, Inno Setup(Windows), DMG·서명(macOS)
 ├─ scripts/
-│  ├─ build.py                    빌드 + 패키징 (로컬/CI 공용)
+│  ├─ build.py                    빌드 + 패키징 (rbshift 컴파일 → PyInstaller → 설치 파일)
 │  ├─ fetch_models.py             모델 미리 받기 (번들/오프라인용)
+│  ├─ evaluate_separation.py      2-Stem 분리 품질 측정 (MUSDB18 7초 테스트 50곡)
+│  ├─ youtube_check.py            YouTube 획득 경로 점검 (실제 네트워크)
 │  └─ make_icons.py               아이콘 생성
 ├─ assets/                        아이콘, 체크 이미지, Pretendard 글꼴
-└─ .github/workflows/build.yml    자동 빌드 · 테스트 · 릴리스
+├─ docs/QUALITY.md                음질 측정 방법과 결과
+└─ .github/workflows/             build.yml (빌드·테스트·릴리스), evaluate.yml (음질 측정, 수동/ eval/* 브랜치)
 ```
 
-동작 흐름: 파일 열기 → `LoadThread` 가 FFmpeg 로 44.1kHz 스테레오 float32 로 디코딩해 캐시 폴더에 `.npy` 저장
-(원본이 48kHz 등이면 원본 샘플레이트 사본도 저장) → `SeparationThread` 가 (필요시 모델 다운로드 후) `engine.separate()` 실행 →
-결과 트랙을 `.npy` 로 저장(마지막 트랙 = 원본 − 나머지, 합이 원본과 정확히 같음)하고 메모리 매핑(memmap)으로 재생 →
-`KeyThread` 가 키 조절된 재생용 트랙 생성 → `ExportThread` 가 `export.Exporter` 로 원본 샘플레이트에서 MR(원본 − 뺀 트랙)·키 조절·
-클리핑 방지(모든 파일에 같은 이득)를 계산해 저장. 무거운 작업은 모두 별도 스레드라 UI 가 멈추지 않습니다.
+동작 흐름 (홈 화면): `PipelineThread` 가 `pipeline.Pipeline` 실행 → 파일은 그대로, YouTube 는 `youtube.acquire()` 로
+오디오 전용 스트림을 원래 컨테이너 그대로 받음 → FFmpeg 로 원본 샘플레이트 float32 한 번 디코딩(.npy) →
+44.1kHz 가 아니면 soxr VHQ 로 AI 입력용 한 번 변환 → `engine.separate()` 로 보컬 추정(반주 = 원본 − 보컬) →
+`export.Exporter` 가 선택한 결과물만 계산(MR 은 원본 샘플레이트에서 원본 − 보컬)·키 조절(0 이 아닐 때 한 번)·피크 검사 후
+선택한 형식으로 한 번 인코딩하고, 저장된 파일을 다시 읽어(ffprobe) 형식을 확인. 같은 입력·같은 모델이면 분리 결과를 재사용.
+고급 옵션 화면은 같은 결과를 트랙별 재생(`player`)·저장(`ExportThread`)에 씁니다. 무거운 작업은 모두 별도 스레드입니다.
 
 ## 2. 소스에서 실행하기
 
@@ -72,7 +74,11 @@ pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu   # L
 pip install -r requirements/common.txt -r requirements/dev.txt
 pip install --no-deps -r requirements/demucs.txt
 
-# 3) 실행
+# 3) 키 조절 도구 (Rubber Band) — CMake + C++ 컴파일러 필요 (없으면 Signalsmith 로 대체되어 동작)
+cmake -S native/rbshift -B build/rbshift -DCMAKE_BUILD_TYPE=Release
+cmake --build build/rbshift --config Release
+
+# 4) 실행
 python run.py
 python run.py "노래.mp3"            # 파일을 열면서 시작
 ```
@@ -87,21 +93,26 @@ python run.py "노래.mp3"            # 파일을 열면서 시작
 | `MUSIC_SEPARATOR_FFMPEG` | 다른 ffmpeg 실행 파일 사용 |
 | `MUSIC_SEPARATOR_FORCE_MODEL=demucs_unittest` | 초소형 테스트 모델로 UI 흐름 확인 (분리 품질 없음) |
 | `MUSIC_SEPARATOR_ROFORMER_URL` | BS-RoFormer SW 체크포인트를 받을 다른 주소 (사내 미러 등, SHA256 은 그대로 검사) |
+| `MUSIC_SEPARATOR_RBSHIFT` | 키 조절 도구(rbshift) 경로 지정 |
+| `MUSIC_SEPARATOR_DENO` | YouTube 챌린지 해석용 JavaScript 엔진(deno) 경로 지정 |
 
 ## 3. 테스트
 
 ```bash
-pytest -q tests                                        # 33개 핵심 테스트
-python run.py --selftest --report selftest.json        # 실제 모델로 분리→저장 전 과정 점검 (모델 다운로드)
-python run.py --selftest --mode 6                      # Demucs 2단계 6-Stem
-python run.py --selftest --engine roformer --mode 6 --seconds 6   # 고급 엔진 (667MB 다운로드, CPU 는 수 분)
+pytest -q tests                                        # 핵심 테스트 (음질·파이프라인·YouTube 규칙 포함)
+python run.py --selftest --preset speed                # Demucs 보컬 모델로 분리→저장 전 과정 점검
+python run.py --selftest --engine roformer --seconds 6 # BS-RoFormer SW (667MB 다운로드, CPU 는 수 분)
 python run.py --selftest --model demucs_unittest       # 모델 없이 빠른 점검 (roformer_unittest 도 가능)
-QT_QPA_PLATFORM=offscreen python run.py --gui-smoke shot.png   # GUI 자동 조작 + 스크린샷
+python run.py --selftest --youtube-test URL            # 실제 YouTube 오디오 받기까지 시험
+QT_QPA_PLATFORM=offscreen python run.py --gui-smoke shot.png   # 홈 원클릭 + 고급 옵션 자동 조작 + 스크린샷
+python scripts/evaluate_separation.py --configs htdemucs,ft_speed,sw --tracks 50   # 분리 품질 측정
+python scripts/youtube_check.py                        # YouTube 스트림 선택·재인코딩 여부·리샘플 단계 확인
 ```
 
 `--selftest` 는 FFmpeg 디코딩, 모델 로드, 분리, 각 형식(WAV 24/32f · FLAC · MP3) 저장과 재검증,
-48kHz 원본 샘플레이트 저장이 원본과 비트 단위로 같은지, MP3 가 샘플 단위로 정렬되는지, 키 조절(440Hz +3 → 523Hz),
-그리고 실제 모델일 때 *모델 출력의 합 ≈ 원본* 인지까지 확인합니다. 빌드된 실행 파일에도 같은 옵션이 들어 있습니다.
+48kHz 원본 샘플레이트 저장이 원본과 비트 단위로 같은지, MP3 가 샘플 단위로 정렬되는지, 키 조절 음정 정확도(+2/−3/±12),
+원클릭 파이프라인(MR = 원본 − 보컬, 리샘플 1회), YouTube 구성 요소(yt-dlp, deno), 그리고 실제 모델일 때
+*모델 출력의 합 ≈ 원본* 인지까지 확인합니다. 빌드된 실행 파일에도 같은 옵션이 들어 있습니다.
 
 ## 4. GitHub Actions 로 Windows·macOS 자동 빌드 (권장)
 
@@ -129,15 +140,18 @@ GitHub 이 제공하는 Windows·macOS 가상 머신에서 빌드합니다.
 
 | 작업 | 내용 |
 |---|---|
-| test | Linux 에서 단위 테스트 + 오프스크린 GUI 테스트 |
-| models | htdemucs·htdemucs_6s 모델 다운로드(캐시) |
-| build ×4 | Windows CPU / Windows CUDA / macOS arm64(macos-14) / macOS Intel(macos-15-intel) 빌드 → 각 OS 에서 단위 테스트, 빌드된 앱 `--selftest`(실제 모델로 분리), `--gui-smoke`, Windows 는 설치 프로그램 무인 설치 후 재검증, macOS 는 DMG 마운트 후 재검증 |
+| test | Linux 에서 rbshift 빌드, 단위 테스트, 오프스크린 GUI 테스트(홈 원클릭 + 고급 옵션), BS-RoFormer SW 실제 가중치 자가 진단, YouTube 점검(실패 무시) |
+| models | 속도 우선 모델(htdemucs_ft 보컬) 다운로드(캐시) |
+| build ×4 | Windows CPU / Windows CUDA / macOS arm64(macos-14) / macOS Intel(macos-15-intel) 빌드(rbshift 포함) → 각 OS 에서 단위 테스트, 빌드된 앱 `--selftest`(실제 모델로 분리·키 조절·원클릭 파이프라인), `--gui-smoke`, Windows 는 설치 프로그램 무인 설치 후 재검증, macOS 는 DMG 마운트 후 재검증 |
 | release | 태그일 때 Release 초안 생성 (2GB 초과 파일은 제외) |
 
 **Run workflow 옵션**: AI 모델 포함 여부, CUDA 빌드 여부와 CUDA 버전(cu126/cu128/cu130), Intel Mac 빌드 여부.
 
 참고
 - GitHub 러너에는 GPU 가 없으므로 CI 테스트는 CPU 경로로 실행됩니다. GPU 가속은 실제 PC 에서 확인해야 합니다.
+- YouTube 는 GitHub Actions 서버 IP 에 자동 접근 확인(봇 차단)을 요구하는 경우가 많아, CI 의 YouTube 점검은 실패해도 빌드를 막지 않습니다.
+  실제 받기는 일반 PC 에서 `--selftest --youtube-test URL` 또는 `scripts/youtube_check.py` 로 확인하세요.
+- 음질 측정: *Actions → Evaluate → Run workflow* (또는 `eval/` 로 시작하는 브랜치 push) → 모델별 결과가 Annotations 에 표시됩니다.
 - **비공개 저장소 + 무료 플랜**은 Artifacts 저장 용량이 작아(500MB) 업로드가 실패할 수 있습니다.
   공개 저장소로 하거나, 태그를 push 해 Release 로 받으세요 (Release 파일은 이 용량에 포함되지 않음).
 - CUDA 빌드는 PyTorch CUDA 라이브러리 때문에 2~3GB 입니다. 설치 파일은 `setup.exe` + `setup-1.bin` … 으로 나뉘며 같은 폴더에 두고 실행합니다.
@@ -148,12 +162,13 @@ GitHub 이 제공하는 Windows·macOS 가상 머신에서 빌드합니다.
 2장의 환경을 만든 뒤:
 
 ```bash
-python scripts/fetch_models.py build/models            # (선택) 모델 미리 받기 ≈135MB
+python scripts/fetch_models.py build/models            # (선택) 속도 우선 모델 미리 받기 ≈80MB
 python scripts/build.py --bundle-models build/models   # 모델 포함 빌드
 python scripts/build.py                                # 모델 미포함 (첫 실행 시 다운로드)
 ```
 
-결과물은 `dist/release/` 에 생깁니다.
+결과물은 `dist/release/` 에 생깁니다. `build.py` 가 먼저 `native/rbshift`(키 조절 도구)를 CMake 로 컴파일하므로
+CMake 와 C++ 컴파일러(Windows: Visual Studio Build Tools, macOS: Xcode CLT)가 필요합니다. (`--skip-rbshift` 로 생략 가능 — 이 경우 Signalsmith 로 대체)
 
 - **Windows**: [Inno Setup 6](https://jrsoftware.org/isdl.php) 이 설치되어 있으면 설치 프로그램까지 만들고, 없으면 portable zip 만 만듭니다.
   CUDA 빌드는 `torch-windows-cuda.txt` 로 torch 를 설치한 뒤 `python scripts/build.py --variant cuda`.
@@ -224,10 +239,14 @@ PyTorch·Python 확장 모듈 로드에 필요합니다. 공증이 거부되면 
 
 | 하고 싶은 것 | 수정할 곳 |
 |---|---|
+| 홈 화면 | `ui/home.py` (입력·추출 대상·키·진행·결과 카드, 창 높이에 따른 촘촘한 배치), 연결은 `main_window.py` 의 `_wire_home` |
+| 처리 방식(속도/품질/최고) | `engine.py` 의 `PRESETS` (사용 엔진, RoFormer 겹침, Demucs shifts/overlap) |
+| YouTube 스트림 선택 규칙 | `youtube.py` 의 `codec_tier()`, `_is_excluded()`, `select_format()` |
+| 피크 처리 기준 | `export.py` 의 `PCM_CEILING_DB`, `MP3_TRUE_PEAK_DB` |
 | 버전 올리기 | `src/music_separator/__init__.py` 의 `__version__` (설치 파일 이름·앱 정보에 자동 반영) → 태그 `vX.Y.Z` push |
 | 분리 모드/모델 바꾸기 | `engine.py` 의 `MODES`·`ENGINES`·`plan_models()`, 새 모델은 `models.py` 의 `MODELS` 에 추가 (Demucs 는 시그니처, RoFormer 는 파일 이름·URL·SHA256) |
 | 프로그램 이름 | `src/music_separator/__init__.py` 의 `APP_NAME`·`APP_SHORT`·`APP_BRAND`·`EXE_NAME`, `installer.iss` 의 `AppName`. `APP_ID`·`DATA_DIR_NAME`·`BUNDLE_ID` 는 바꾸면 기존 설정·모델 폴더를 못 찾으니 그대로 두세요 |
-| 키 조절 범위·방식 | `pitch.py` (`KEY_MIN`/`KEY_MAX`, `shift()`), 저장 반영은 `export.py` |
+| 키 조절 범위·방식 | `pitch.py` (`KEY_MIN`/`KEY_MAX`, `shift()`, rbshift 옵션), 도구 소스는 `native/rbshift/main.cpp` |
 | 트랙 이름·색상 | `engine.py` 의 `STEM_STYLE` |
 | 화면 색·글꼴 | `ui/theme.py` (색 상수와 스타일시트), 글꼴 파일은 `assets/fonts/` (Pretendard) |
 | 아이콘 | `ui/icons.py` (SVG 경로를 코드에 포함) |
@@ -252,7 +271,9 @@ PyTorch·Python 확장 모듈 로드에 필요합니다. 공증이 거부되면 
 | Demucs | 4.1.0 (`--no-deps`) | 진행률 콜백·취소 지원. 사용하지 않는 `sphn`/`huggingface-hub` 의존성 제외 |
 | 재생 | sounddevice(PortAudio) | Windows/macOS 휠에 PortAudio 포함, 콜백 기반 저지연 멀티트랙 믹싱 |
 | FFmpeg | imageio-ffmpeg | OS 별 정적 ffmpeg 바이너리를 휠로 제공 → 번들 간단. MP3(libmp3lame, Xing 헤더로 샘플 정렬)·FLAC 인코딩에도 사용 |
-| 키 조절 | python-stretch 0.3.1 (Signalsmith Stretch) | MIT, 모든 대상 OS 휠 제공, 의존성 없음. 곡 전체를 한 번에 처리해 블록 경계 잡음 없음 |
+| 키 조절 | Rubber Band Library 4.0 R3 (`native/rbshift`) | 음정 오차 0.0센트·스테레오 보존이 Signalsmith 보다 좋음(docs/QUALITY.md). GPL 이라 FFmpeg 처럼 별도 실행 파일로 호출. 대체: python-stretch 0.3.1 (Signalsmith, MIT) |
+| 리샘플링 | soxr 1.1.0 (VHQ) | THD+N 약 −150dB, 22kHz 이상 앨리어싱 약 −150dB (FFmpeg 기본 swr 은 22.6kHz 성분이 −15dB 로 접힘). LGPL-2.1+ |
+| YouTube | yt-dlp 2026.8.19 + yt-dlp-ejs + Deno 2.9.7 | YouTube 챌린지 해석에 JavaScript 엔진 필요(yt-dlp 권장 Deno). 앱 안에서 최신 yt-dlp 로 업데이트 가능 |
 | 고급 엔진 | 자체 BS-RoFormer 구현 | 추가 패키지(rotary-embedding-torch 등) 없이 SW 체크포인트를 그대로 로드. 가중치는 번들하지 않고 첫 사용 시 내려받음 |
 
 최소 사양: Windows 10 1809+ / 11 (x64), macOS 12+, RAM 8GB 권장(4분 곡 기준 약 3GB 사용), 디스크 여유 2GB 이상.

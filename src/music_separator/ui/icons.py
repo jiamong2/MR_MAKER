@@ -60,6 +60,22 @@ _ICONS: dict[str, str] = {
     "x": '<path d="M6 6l12 12M18 6L6 18" {S}/>',
     "chevron-down": '<path d="M6.5 9.5l5.5 5.5 5.5-5.5" {S}/>',
     "upload": '<path d="M12 15.5V4M7.5 8.5L12 4l4.5 4.5" {S}/><path d="M4 15.5v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" {S}/>',
+    "cloud-upload": '<path d="M7 18.5H6.2a4.2 4.2 0 0 1-.6-8.4 6.3 6.3 0 0 1 12.2-1.3A4.9 4.9 0 0 1 17.5 18.5H17" {S}/>'
+                    '<path d="M12 20.5v-8.5M8.6 15.2L12 11.8l3.4 3.4" {S}/>',
+    "arrow-right": '<path d="M4.5 12h15M13.5 6l6 6-6 6" {S}/>',
+    "arrow-left": '<path d="M19.5 12h-15M10.5 6l-6 6 6 6" {S}/>',
+    "chevron-right": '<path d="M9.5 6l6 6-6 6" {S}/>',
+    "chevron-left": '<path d="M14.5 6l-6 6 6 6" {S}/>',
+    "refresh": '<path d="M20 11.5A8 8 0 0 0 5.6 6.8L4 8.5M4 4v4.5h4.5" {S}/><path d="M4 12.5a8 8 0 0 0 14.4 4.7L20 15.5M20 20v-4.5h-4.5" {S}/>',
+    "link": '<path d="M10 14a4.5 4.5 0 0 0 6.4 0l3.2-3.2a4.5 4.5 0 0 0-6.4-6.4l-1.2 1.2" {S}/>'
+            '<path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3.2 3.2a4.5 4.5 0 0 0 6.4 6.4l1.2-1.2" {S}/>',
+    "file-music": '<path d="M14 2.5H7a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7.5z" {S}/><path d="M14 2.5v5h5" {S}/>'
+                  '<path d="M11 17.5V11l4-1" {S}/><circle cx="9.5" cy="17.5" r="1.5" {S}/>',
+    "home": '<path d="M3.5 10.5L12 3.5l8.5 7" {S}/><path d="M5.5 9v10.5h13V9" {S}/><path d="M10 19.5v-5h4v5" {S}/>',
+    "external": '<path d="M14 4.5h5.5V10M19.5 4.5L11 13" {S}/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" {S}/>',
+    "clock": '<circle cx="12" cy="12" r="8.5" {S}/><path d="M12 7.5V12l3 2" {S}/>',
+    "circle": '<circle cx="12" cy="12" r="8" {S}/>',
+    "dot": '<circle cx="12" cy="12" r="4" fill="{c}" stroke="none"/>',
 }
 
 STEM_ICON = {

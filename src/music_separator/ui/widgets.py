@@ -22,6 +22,33 @@ ROW_HEIGHT = 96
 ROW_SPACING = 8
 
 
+class ElideLabel(QLabel):
+    """폭이 부족하면 글자 끝을 '…'로 줄여 표시 (전체 내용은 툴팁). 너무 좁으면 비움."""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self._full = text
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setMinimumWidth(0)
+
+    def setText(self, text: str):
+        self._full = text or ""
+        self.setToolTip(self._full)
+        self._apply()
+
+    def text(self) -> str:
+        return self._full
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._apply()
+
+    def _apply(self):
+        w = self.width()
+        shown = "" if w < 60 else self.fontMetrics().elidedText(self._full, Qt.TextElideMode.ElideRight, w)
+        QLabel.setText(self, shown)
+
+
 def glow(widget: QWidget, color: str = theme.ACCENT, radius: int = 22, alpha: int = 70,
          dy: float = 3.0) -> None:
     eff = QGraphicsDropShadowEffect(widget)
@@ -123,14 +150,14 @@ class ToggleSwitch(QAbstractButton):
         col = QColor(int(off.red() + (on.red() - off.red()) * t), int(off.green() + (on.green() - off.green()) * t),
                      int(off.blue() + (on.blue() - off.blue()) * t))
         if not self.isEnabled():
-            col = QColor("#e6eaf0")
+            col = QColor("#e5e9e3")
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(col)
         p.drawRoundedRect(r, r.height() / 2, r.height() / 2)
         d = r.height() - 6
         x = r.left() + 3 + (r.width() - d - 6) * t
         p.setPen(QPen(QColor(0, 0, 0, 22), 1))
-        p.setBrush(QColor("#ffffff") if self.isEnabled() else QColor("#f6f7fa"))
+        p.setBrush(QColor("#ffffff") if self.isEnabled() else QColor("#f6f7f4"))
         p.drawEllipse(QRectF(x, r.top() + 3, d, d))
         p.end()
 
@@ -174,17 +201,17 @@ class ModeTile(QAbstractButton):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
         if self.isChecked():
-            p.setBrush(QColor("#f4f8ff"))
+            p.setBrush(QColor(theme.ACCENT_SOFT))
             p.setPen(QPen(QColor(theme.ACCENT), 1.6))
         else:
             p.setBrush(QColor("#ffffff") if not self._hover else QColor(theme.SURFACE_2))
-            p.setPen(QPen(QColor(theme.BORDER if not self._hover else "#c9d0dc"), 1))
+            p.setPen(QPen(QColor(theme.BORDER if not self._hover else "#c8cfc5"), 1))
         p.drawRoundedRect(r, 12, 12)
         enabled = self.isEnabled()
         p.setPen(QColor(theme.ACCENT if self.isChecked() else (theme.TEXT if enabled else theme.TEXT_FAINT)))
         p.setFont(theme.font(15, QFont.Weight.Bold))
         p.drawText(QRectF(r.left(), r.top() + 18, r.width(), 24), Qt.AlignmentFlag.AlignCenter, self.title)
-        p.setPen(QColor("#3a64b8" if self.isChecked() else theme.TEXT_DIM))
+        p.setPen(QColor("#2f6f62" if self.isChecked() else theme.TEXT_DIM))
         p.setFont(theme.font(12))
         p.drawText(QRectF(r.left() + 8, r.top() + 48, r.width() - 16, r.height() - 56),
                    int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap),
@@ -231,7 +258,7 @@ class ChipButton(QAbstractButton):
             p.setPen(QPen(QColor("#f0a2a8"), 1.4))
         else:
             p.setBrush(QColor("#ffffff" if not self._hover else theme.SURFACE_2))
-            p.setPen(QPen(QColor(theme.BORDER_2 if not self._hover else "#c3cad6"), 1))
+            p.setPen(QPen(QColor(theme.BORDER_2 if not self._hover else "#c3cbc0"), 1))
         p.drawRoundedRect(r, 10, 10)
         name = "mic-off" if on and self.icon_name == "mic" else self.icon_name
         col = theme.DANGER if on else theme.TEXT_DIM
@@ -268,11 +295,11 @@ class PlayButton(QAbstractButton):
         r = QRectF(self.rect()).adjusted(3, 3, -3, -3)
         g = QLinearGradient(r.topLeft(), r.bottomLeft())
         if self.isEnabled():
-            g.setColorAt(0, QColor("#5a96ff"))
-            g.setColorAt(1, QColor("#2f6ee8"))
+            g.setColorAt(0, QColor(theme.ACCENT))
+            g.setColorAt(1, QColor(theme.ACCENT))
         else:
-            g.setColorAt(0, QColor("#c9d9f7"))
-            g.setColorAt(1, QColor("#b9cdf3"))
+            g.setColorAt(0, QColor("#bcd8d1"))
+            g.setColorAt(1, QColor("#bcd8d1"))
         p.setBrush(g)
         p.setPen(QPen(QColor(255, 255, 255, 40), 1))
         p.drawEllipse(r)
@@ -608,7 +635,7 @@ class TimeRuler(QWidget):
         while t <= t1 + 1e-6:
             x = (t - t0) * pps
             if t >= 0 and -1 <= x <= w + 1:
-                p.setPen(QPen(QColor("#c3cad6"), 1))
+                p.setPen(QPen(QColor("#c3cbc0"), 1))
                 p.drawLine(QPointF(x, h - 9), QPointF(x, h - 1))
                 p.setPen(QColor(theme.TEXT_DIM))
                 m, s = divmod(t, 60)
@@ -618,7 +645,7 @@ class TimeRuler(QWidget):
                 for k in range(1, 4):
                     xs = x + step * k / 4 * pps
                     if xs < w:
-                        p.setPen(QPen(QColor("#e1e6ed"), 1))
+                        p.setPen(QPen(QColor("#e1e6df"), 1))
                         p.drawLine(QPointF(xs, h - 5), QPointF(xs, h - 1))
             t += step
         x = self.vp.to_x(self._pos, w)
@@ -743,7 +770,7 @@ class TrackCard(QFrame):
         c = self.color.name()
         self.slider.setStyleSheet(
             f"QSlider::sub-page:horizontal {{ background: {c}; border-radius: 2px; }}"
-            f"QSlider::handle:horizontal {{ background: #f4f6fb; border: 2px solid {c}; width: 10px;"
+            f"QSlider::handle:horizontal {{ background: #f6f7f4; border: 2px solid {c}; width: 10px;"
             f" margin: -5px 0; border-radius: 7px; }}")
         self.slider.valueChanged.connect(self._on_gain)
         self.gain_lbl = QLabel("100%")
