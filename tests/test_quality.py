@@ -543,3 +543,24 @@ def test_safe_filename_windows_rules():
     assert safe_filename("nul.wav") == "_nul.wav"
     assert safe_filename("  ...  ") == "track"
     assert safe_filename("a/b:c") == "a_b_c"
+
+
+def test_updater_release_parsing():
+    from music_separator import updater
+
+    def rel(tag, names, **kw):
+        return {"tag_name": tag, "html_url": "https://example/r", "draft": False, "prerelease": False,
+                "assets": [{"name": n, "browser_download_url": "https://dl/" + n, "size": 10} for n in names], **kw}
+
+    names = ["MRMaker-99.0.0-windows-x64-cpu-setup.exe", "MRMaker-99.0.0-windows-x64-cpu-portable.zip",
+             "MRMaker-99.0.0-windows-x64-cuda-setup-1.bin", "MRMaker-99.0.0-windows-x64-cuda-setup.exe",
+             "MRMaker-99.0.0-macos-arm64.dmg"]
+    cpu = updater.parse_release(rel("v99.0.0", names), "cpu", auto=True)
+    assert cpu.version == "99.0.0" and [a.name for a in cpu.assets] == [names[0]]
+    cuda = updater.parse_release(rel("v99.0.0", names), "cuda", auto=True)
+    assert [a.name for a in cuda.assets] == [names[3], names[2]]  # exe 먼저, 분할 bin 같은 폴더
+    mac = updater.parse_release(rel("v99.0.0", names), "arm64", auto=False)
+    assert mac and not mac.can_auto_install and mac.page_url == "https://example/r"
+    assert updater.parse_release(rel("v0.0.1", names), "cpu", auto=True) is None      # 구버전
+    assert updater.parse_release(rel("v99.0.0", names, draft=True), "cpu", auto=True) is None
+    assert updater.is_newer("1.10.0", "1.9.9") and not updater.is_newer("1.2.2", "1.2.2")

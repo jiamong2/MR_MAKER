@@ -27,7 +27,8 @@ from .widgets import (COLUMN_GAP, HEADER_WIDTH, ROW_SPACING, ChipButton, DropZon
                       text_button)
 from ..export import ExportJob, ExportOptions, ExportSource
 from .workers import (ExportThread, KeyThread, LoadedAudio, LoadThread, PipelineThread, SeparationThread,
-                      YouTubeLoadThread, YouTubeUpdateThread)
+                      UpdateCheckThread, UpdateDownloadThread, YouTubeLoadThread,
+                      YouTubeUpdateThread)
 
 log = logging.getLogger(__name__)
 
@@ -207,6 +208,12 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence.StandardKey.ZoomOut, self, activated=lambda: self.viewport.set_zoom(
             self.viewport.zoom / 1.5))
 
+        self.update_info = None
+        self.update_check_thread: Optional[UpdateCheckThread] = None
+        self.update_dl_thread: Optional[UpdateDownloadThread] = None
+        if getattr(sys, "frozen", False) and not os.environ.get("MUSIC_SEPARATOR_NONINTERACTIVE"):
+            QTimer.singleShot(2500, lambda: self.check_for_update(manual=False))
+
         self.device_thread = DeviceThread(self)
         self.device_thread.done.connect(self._on_devices)
         self.device_thread.start()
@@ -228,7 +235,13 @@ class MainWindow(QMainWindow):
         self.home = HomePage()
         self.pages.addWidget(self.home)
         self.pages.addWidget(self._build_advanced())
-        self.setCentralWidget(self.pages)
+        root = QWidget()
+        lay = QVBoxLayout(root)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(self._build_update_bar())
+        lay.addWidget(self.pages, 1)
+        self.setCentralWidget(root)
         self._wire_home()
 
     def show_home(self):
@@ -683,6 +696,7 @@ class MainWindow(QMainWindow):
             ("AI 모델 폴더 열기", lambda: paths.open_in_file_manager(paths.user_models_dir()), None),
             ("AI 모델 가져오기 (오프라인 설치)…", self.import_models, None),
             ("YouTube 기능 업데이트", self.update_youtube, None),
+            ("새 버전 확인", lambda: self.check_for_update(manual=True), None),
             ("로그 폴더 열기", lambda: paths.open_in_file_manager(paths.logs_dir()), None),
             None,
             (f"{APP_NAME} 정보", self.show_about, None),
@@ -1875,6 +1889,108 @@ class MainWindow(QMainWindow):
             QProcess.startDetached(sys.executable, args)
             self.close()
 
+    # ======================================================= app update ===
+    def _build_update_bar(self) -> QFrame:
+        bar = QFrame()
+        bar.setObjectName("UpdateBar")
+        bar.setStyleSheet(f"QFrame#UpdateBar {{ background: {theme.ACCENT_SOFT}; "
+                          f"border-bottom: 1px solid {theme.ACCENT_SOFT_2}; }}")
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(16, 8, 12, 8)
+        lay.setSpacing(8)
+        self.update_label = QLabel()
+        self.update_label.setStyleSheet("color: #2f6f62; font-weight: 600;")
+        self.update_label.setWordWrap(True)
+        self.update_btn = QPushButton("업데이트")
+        self.update_btn.setProperty("kind", "primary")
+        self.update_btn.clicked.connect(self.start_app_update)
+        self.update_later_btn = QPushButton("나중에")
+        self.update_later_btn.setProperty("kind", "link")
+        self.update_later_btn.clicked.connect(self._update_later)
+        lay.addWidget(self.update_label, 1)
+        lay.addWidget(self.update_btn)
+        lay.addWidget(self.update_later_btn)
+        bar.hide()
+        self.update_bar = bar
+        return bar
+
+    def check_for_update(self, manual: bool = False):
+        if self.update_check_thread is not None or self.update_dl_thread is not None:
+            return
+        t = UpdateCheckThread(self)
+        self.update_check_thread = t
+        t.found.connect(lambda info: self._on_update_checked(info, manual))
+        t.failed.connect(lambda m: manual and self._error(
+            f"새 버전을 확인하지 못했습니다. 인터넷 연결을 확인해 주세요.\n({m})"))
+        t.finished.connect(lambda: (setattr(self, "update_check_thread", None), t.deleteLater()))
+        t.start()
+
+    def _on_update_checked(self, info, manual: bool):
+        if info is None:
+            if manual:
+                QMessageBox.information(self, "새 버전 확인", f"최신 버전을 사용하고 있습니다. (v{__version__})")
+            return
+        self.update_info = info
+        self.update_label.setText(f"새 버전(v{info.version})이 나왔습니다. 지금 버전: v{__version__}")
+        self.update_btn.setText("업데이트" if info.can_auto_install else "다운로드 페이지 열기")
+        self.update_btn.setEnabled(True)
+        self.update_later_btn.show()
+        self.update_bar.show()
+
+    def _update_later(self):
+        if self.update_dl_thread is not None:
+            self.update_dl_thread.cancel.set()
+        self.update_bar.hide()
+
+    def start_app_update(self):
+        info = self.update_info
+        if info is None:
+            return
+        if not info.can_auto_install:
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+
+            QDesktopServices.openUrl(QUrl(info.page_url))
+            return
+        if self.busy():
+            QMessageBox.information(self, "업데이트", "지금 진행 중인 작업이 끝난 뒤 업데이트해 주세요.")
+            return
+        t = UpdateDownloadThread(info, self)
+        self.update_dl_thread = t
+        self.update_btn.setEnabled(False)
+        self.update_later_btn.setText("취소")
+        t.progress.connect(lambda f: self.update_label.setText(
+            f"새 버전(v{info.version})을 내려받는 중… {f * 100:.0f}%"))
+        t.done.connect(self._on_update_downloaded)
+        t.failed.connect(self._on_update_failed)
+        t.finished.connect(lambda: (setattr(self, "update_dl_thread", None), t.deleteLater()))
+        t.start()
+
+    def _on_update_failed(self, msg: str):
+        self.update_later_btn.setText("나중에")
+        if not msg:  # 사용자가 취소
+            return
+        self._on_update_checked(self.update_info, False)
+        self._error(msg)
+
+    def _on_update_downloaded(self, setup: str):
+        from .. import updater
+
+        if self.busy():
+            self._on_update_failed("")
+            QMessageBox.information(self, "업데이트", "진행 중인 작업이 끝난 뒤 다시 [업데이트]를 눌러 주세요.")
+            self._on_update_checked(self.update_info, False)
+            return
+        self.update_label.setText("업데이트를 설치합니다. 잠시 후 프로그램이 다시 켜집니다…")
+        try:
+            updater.launch_installer(Path(setup))
+        except Exception as exc:  # noqa: BLE001
+            log.exception("could not start installer")
+            self._on_update_checked(self.update_info, False)
+            self._error(f"설치 프로그램을 실행하지 못했습니다.\n({exc})")
+            return
+        QTimer.singleShot(300, self.close)
+
     # ======================================================= drag & drop ===
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls() and not self.busy():
@@ -1957,6 +2073,11 @@ class MainWindow(QMainWindow):
         if self.key_thread is not None:
             self.key_thread.cancel()
             self.key_thread.wait(30000)
+        if self.update_dl_thread is not None:
+            self.update_dl_thread.cancel.set()
+        for t in (self.update_check_thread, self.update_dl_thread):
+            if t is not None and t.isRunning():
+                t.wait(10000)
         if self.device_thread.isRunning():  # 시작 직후 바로 닫아도 스레드 정리 후 종료 (강제 종료 방지)
             self.device_thread.wait(15000)
         self._save_settings()

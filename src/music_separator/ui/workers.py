@@ -325,3 +325,40 @@ class KeyThread(QThread):
         except BaseException as exc:  # noqa: BLE001
             log.exception("key shift failed")
             self.failed.emit(engine.friendly_error(exc, "키 변경"))
+
+
+class UpdateCheckThread(QThread):
+    found = Signal(object)        # updater.UpdateInfo 또는 None
+    failed = Signal(str)
+
+    def run(self):
+        from .. import updater
+
+        try:
+            self.found.emit(updater.check())
+        except Exception as exc:  # noqa: BLE001
+            log.info("update check failed: %s", exc)
+            self.failed.emit(str(exc))
+
+
+class UpdateDownloadThread(QThread):
+    progress = Signal(float)
+    done = Signal(str)            # setup.exe 경로
+    failed = Signal(str)
+
+    def __init__(self, info, parent=None):
+        super().__init__(parent)
+        self.info = info
+        self.cancel = threading.Event()
+
+    def run(self):
+        from .. import updater
+
+        try:
+            path = updater.download(self.info, lambda d, t: self.progress.emit(d / t if t else 0.0), self.cancel)
+            self.done.emit(str(path))
+        except InterruptedError:
+            self.failed.emit("")
+        except Exception as exc:  # noqa: BLE001
+            log.exception("update download failed")
+            self.failed.emit(f"업데이트 파일을 받지 못했습니다. 인터넷 연결을 확인해 주세요.\n({exc})")

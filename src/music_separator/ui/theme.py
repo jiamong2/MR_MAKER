@@ -6,7 +6,9 @@ from __future__ import annotations
 import logging
 import sys
 
+from PySide6.QtCore import QEvent, QObject
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
+from PySide6.QtWidgets import QMenu
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +71,21 @@ def font(px: int = 13, weight: QFont.Weight = QFont.Weight.Normal, tabular: bool
     return f
 
 
+class _NoHintingFilter(QObject):
+    """팝업 메뉴의 글꼴을 힌팅 없이 그리도록 보정."""
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.Type.Polish and isinstance(obj, QMenu):
+            f = obj.font()
+            if f.hintingPreference() != QFont.HintingPreference.PreferNoHinting:
+                f.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
+                obj.setFont(f)
+        return False
+
+
+_font_fixer = None
+
+
 def rgba(color: str, alpha: float) -> str:
     c = QColor(color)
     return f"rgba({c.red()},{c.green()},{c.blue()},{alpha:.3f})"
@@ -92,6 +109,14 @@ def apply(app) -> None:
     load_fonts()
     app.setStyle("Fusion")
     app.setFont(font(13))
+    # Windows 는 메뉴·툴팁·대화상자에 시스템 글꼴 설정(힌팅 포함)을 따로 적용한다.
+    # Pretendard(CFF) 를 힌팅해 작게 그리면 '그' 의 가로획 같은 얇은 획이 사라지므로 모든 위젯에 동일하게 맞춘다.
+    for cls in ("QMenu", "QMenuBar", "QToolTip", "QMessageBox", "QDialog", "QComboBox",
+                "QAbstractItemView", "QHeaderView", "QLineEdit", "QPushButton", "QLabel"):
+        app.setFont(font(13), cls)
+    global _font_fixer
+    _font_fixer = _NoHintingFilter(app)
+    app.installEventFilter(_font_fixer)
     try:  # 창 제목 표시줄도 밝게 (Qt 6.8+)
         from PySide6.QtCore import Qt
 
@@ -216,7 +241,7 @@ QLabel#StatusBusy {{ color: {ACCENT}; font-weight: 700; font-size: 13px; }}
 QLabel#StatusErr {{ color: {DANGER}; font-weight: 700; font-size: 13px; }}
 
 QMenu {{ background: {SURFACE}; border: 1px solid {BORDER_2}; border-radius: 10px; padding: 6px; }}
-QMenu::item {{ padding: 7px 18px; border-radius: 6px; color: {TEXT}; }}
+QMenu::item {{ padding: 7px 18px; font-size: 13px; border-radius: 6px; color: {TEXT}; }}
 QMenu::item:selected {{ background: {ACCENT_SOFT}; color: {TEXT}; }}
 QMenu::separator {{ height: 1px; background: {BORDER}; margin: 5px 8px; }}
 QMenuBar {{ background: {SURFACE}; color: {TEXT}; }}
