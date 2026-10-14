@@ -324,7 +324,7 @@ class Pipeline:
         opts = ExportOptions(keep_native_rate=spec.keep_native_rate, semitones=spec.semitones,
                              formant_vocals=spec.formant_vocals)
         jobs = self.jobs(prep, res)
-        song_dir = Path(spec.out_dir) / audio_io.safe_filename(prep.title, 80)
+        song_dir = Path(spec.out_dir) / audio_io.safe_filename(prep.title, 60)
         try:
             song_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -371,7 +371,7 @@ class Pipeline:
     def jobs(self, prep: Prepared, res: engine.SeparationResult) -> list[ExportJob]:
         spec = self.spec
         ext = audio_io.EXPORT_FORMATS[spec.fmt][1]
-        song = audio_io.safe_filename(prep.title, 80)
+        song = audio_io.safe_filename(prep.title, 60)
         song_dir = Path(spec.out_dir) / song
         key = f" [Key {spec.semitones:+d}]" if spec.semitones else ""
         out = []

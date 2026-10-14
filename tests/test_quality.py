@@ -526,3 +526,20 @@ def test_default_preset_by_build(monkeypatch, tmp_path):
         (tmp_path / "build_info.json").write_text(json.dumps({"variant": variant}), encoding="utf-8")
         assert engine.build_variant() == variant
         assert engine.app_default_preset() == want
+
+
+def test_safe_filename_windows_rules():
+    from music_separator.audio_io import safe_filename
+    # 잘린 지점이 공백이면 Windows가 폴더명 끝 공백을 지워 경로가 깨진다(실사용 버그)
+    title = "2023 DAY6 Christmas Special Concert 'The Present : You are My Day' LIVE | Love me"
+    for n in range(20, 90):
+        s = safe_filename(title, n)
+        assert s == s.rstrip(" ."), (n, s)
+        assert len(s) <= n
+    long = "a" * 50 + " " + "b" * 200 + ".wav"
+    out = safe_filename(long)
+    assert out.endswith(".wav") and len(out) <= 120 and not out[:-4].endswith(" ")
+    assert safe_filename("CON") == "_CON"
+    assert safe_filename("nul.wav") == "_nul.wav"
+    assert safe_filename("  ...  ") == "track"
+    assert safe_filename("a/b:c") == "a_b_c"

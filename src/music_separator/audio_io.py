@@ -444,9 +444,26 @@ def estimate_export_bytes(n_samples: int, fmt: str, sample_rate: int = SAMPLE_RA
 _BAD_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
 
+_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+
+
 def safe_filename(name: str, max_len: int = 120) -> str:
-    name = _BAD_CHARS.sub("_", name).strip().rstrip(".")
-    return (name or "track")[:max_len]
+    """Windows·macOS 에서 쓸 수 있는 파일/폴더 이름.
+
+    - 금지 문자(\\ / : * ? " < > |) 와 제어 문자는 '_' 로, 연속 공백은 하나로
+    - 길이를 줄일 때 확장자(.wav 등)는 남기고, 줄인 뒤 끝의 공백·마침표를 제거
+      (Windows 는 폴더 이름 끝의 공백·마침표를 지운 채 만들기 때문에, 남겨 두면 경로를 찾지 못함)
+    - CON, NUL 같은 Windows 예약 이름은 앞에 '_' 를 붙임"""
+    name = re.sub(r"\s+", " ", _BAD_CHARS.sub("_", name or "")).strip()
+    stem, ext = os.path.splitext(name)
+    if not (1 < len(ext) <= 6 and ext[1:].isalnum()):
+        stem, ext = name, ""
+    stem = stem[:max(1, max_len - len(ext))].rstrip(" .")
+    if not stem:
+        stem = "track"
+    if stem.split(".")[0].upper() in _RESERVED:
+        stem = "_" + stem
+    return stem + ext
 
 
 def unique_path(path: Path) -> Path:

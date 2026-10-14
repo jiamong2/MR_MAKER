@@ -1310,7 +1310,7 @@ class MainWindow(QMainWindow):
 
     # ========================================================== export ===
     def _song(self) -> str:
-        return audio_io.safe_filename(self.loaded.name if self.loaded else "track", 80)
+        return audio_io.safe_filename(self.loaded.name if self.loaded else "track", 60)
 
     def _song_dir(self) -> Path:
         return self.output_dir / self._song()

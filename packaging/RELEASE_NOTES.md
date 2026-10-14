@@ -10,6 +10,10 @@
 | Mac (M1~M4, Apple Silicon) | `MRMaker-…-macos-arm64.dmg` |
 | Mac (Intel) | `MRMaker-…-macos-x86_64.dmg` |
 
+### v1.2.2 수정 사항
+- 제목이 긴 YouTube 영상을 키 조절해 저장할 때 "키 조절 단계에서 문제가 생겼습니다"(FileNotFoundError)로 실패하던 문제를 고쳤습니다.
+  (긴 제목을 자른 끝이 공백이면 Windows가 폴더 이름에서 공백을 지워 저장 경로가 어긋났습니다.)
+
 기본 처리 방식: CPU 버전·Intel Mac = 속도 우선, CUDA 버전·Apple Silicon = 품질 우선 (고급 옵션에서 변경 가능)
 
 ### 설치 시 보안 경고 안내
