@@ -128,6 +128,7 @@ def build_msi(src: Path, variant: str):
     run([wix, "build", ROOT / "packaging" / "windows" / "msi" / "MRMaker.wxs", "-arch", "x64",
          "-d", f"Version={__version__}", "-d", f"SourceDir={src.resolve()}",
          "-d", f"IconPath={(ROOT / 'assets' / 'icon.ico').resolve()}", "-o", out])
+    out.with_suffix(".wixpdb").unlink(missing_ok=True)      # 디버그용 파일은 릴리스에 올리지 않음
     print(f"msi -> {out} ({out.stat().st_size / 1048576:.0f} MB)")
     win_sign([out])
 
