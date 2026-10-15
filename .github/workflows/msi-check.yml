@@ -52,9 +52,12 @@ jobs:
           if (-not (Test-Path $lnk)) { throw "start menu shortcut missing" }
           $p = Start-Process msiexec -ArgumentList "/i", "out\MRMaker-1.0.1.msi", "/qn", "/l*v", "i2.log" -Wait -PassThru
           if ($p.ExitCode -ne 0) { Select-String -Path i2.log -Pattern "error|Return value 3" | Select-Object -Last 10 | ForEach-Object { Write-Host "::error::$($_.Line)" }; throw "upgrade failed $($p.ExitCode)" }
-          $n = @(Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall |
-                 Get-ItemProperty | Where-Object { $_.DisplayName -eq "MR MAKER for ui.clover" }).Count
-          if ($n -ne 1) { throw "expected one ARP entry after upgrade, got $n" }
+          $wi = New-Object -ComObject WindowsInstaller.Installer
+          $codes = @($wi.RelatedProducts("{6FA73F04-BFA9-4E99-8B94-39B539B8F37D}"))
+          if ($codes.Count -ne 1) { throw "expected one installed product after upgrade, got $($codes.Count)" }
+          $ver = $wi.ProductInfo($codes[0], "VersionString")
+          if ($ver -ne "1.0.1") { throw "installed version is $ver, expected 1.0.1" }
+          "installed product after upgrade: $ver"
           $p = Start-Process msiexec -ArgumentList "/x", "out\MRMaker-1.0.1.msi", "/qn", "/l*v", "u.log" -Wait -PassThru
           if ($p.ExitCode -ne 0) { Select-String -Path u.log -Pattern "error|Return value 3" | Select-Object -Last 10 | ForEach-Object { Write-Host "::error::$($_.Line)" }; throw "uninstall failed $($p.ExitCode)" }
           if (Test-Path "$dir\MRMaker.exe") { throw "files left after uninstall" }
