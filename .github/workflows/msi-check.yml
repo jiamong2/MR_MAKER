@@ -25,6 +25,9 @@ jobs:
           Copy-Item "$env:WINDIR\System32\where.exe" dist\MRMaker\MRMaker.exe
           "hello" | Set-Content dist\MRMaker\_internal\a.txt
           "deep" | Set-Content dist\MRMaker\_internal\sub\b.dat
+          # 외부 .cab 분할 시험용 (압축이 안 되는 무작위 데이터 3MB x 3)
+          foreach ($i in 1..3) { $b = New-Object byte[] 3145728; (New-Object Random $i).NextBytes($b)
+            [IO.File]::WriteAllBytes("$PWD\dist\MRMaker\_internal\blob$i.bin", $b) }
       - name: Build MSI (1.0.0 and 1.0.1)
         run: |
           foreach ($v in "1.0.0", "1.0.1") {
@@ -36,7 +39,14 @@ jobs:
               throw "wix build failed ($v)"
             }
           }
-          Get-ChildItem out | Format-Table Name, Length
+          $out = wix build packaging\windows\msi\MRMaker.wxs -arch x64 -d Version=1.0.2 -d SourceDir="$PWD\dist\MRMaker" `
+            -d IconPath="$PWD\assets\icon.ico" -d ExternalCabs=1 -d CabPrefix=MRMaker-1.0.2-cuda- -d MediaMB=4 `
+            -o cabs\MRMaker-1.0.2.msi 2>&1
+          $out | ForEach-Object { Write-Host $_ }
+          if ($LASTEXITCODE -ne 0) { $out | Select-Object -Last 12 | ForEach-Object { Write-Host "::error::$_" }; throw "wix build (cabs) failed" }
+          $n = @(Get-ChildItem cabs -Filter "MRMaker-1.0.2-cuda-*.cab").Count
+          if ($n -lt 2) { Write-Host "::error::expected several external cabs, got $n"; throw "cabs" }
+          Get-ChildItem out, cabs | Format-Table Name, Length
       - name: Install, upgrade, uninstall
         run: |
           trap { Write-Host "::error::$_"; exit 1 }
@@ -58,7 +68,13 @@ jobs:
           $ver = $wi.ProductInfo($codes[0], "VersionString")
           if ($ver -ne "1.0.1") { throw "installed version is $ver, expected 1.0.1" }
           "installed product after upgrade: $ver"
-          $p = Start-Process msiexec -ArgumentList "/x", "out\MRMaker-1.0.1.msi", "/qn", "/l*v", "u.log" -Wait -PassThru
+          # 외부 .cab 버전으로 업그레이드 (MSI + cab 들을 같은 폴더에서 실행)
+          $p = Start-Process msiexec -ArgumentList "/i", "cabs\MRMaker-1.0.2.msi", "/qn", "/l*v", "i3.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Select-String -Path i3.log -Pattern "error|Return value 3" | Select-Object -Last 10 | ForEach-Object { Write-Host "::error::$($_.Line)" }; throw "cab upgrade failed $($p.ExitCode)" }
+          if (-not (Test-Path "$dir\_internal\blob3.bin")) { throw "cab payload not installed" }
+          $ver = $wi.ProductInfo(@($wi.RelatedProducts("{6FA73F04-BFA9-4E99-8B94-39B539B8F37D}"))[0], "VersionString")
+          if ($ver -ne "1.0.2") { throw "after cab upgrade version is $ver" }
+          $p = Start-Process msiexec -ArgumentList "/x", "cabs\MRMaker-1.0.2.msi", "/qn", "/l*v", "u.log" -Wait -PassThru
           if ($p.ExitCode -ne 0) { Select-String -Path u.log -Pattern "error|Return value 3" | Select-Object -Last 10 | ForEach-Object { Write-Host "::error::$($_.Line)" }; throw "uninstall failed $($p.ExitCode)" }
           if (Test-Path "$dir\MRMaker.exe") { throw "files left after uninstall" }
           if (Test-Path $lnk) { throw "shortcut left after uninstall" }
