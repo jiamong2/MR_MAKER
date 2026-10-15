@@ -18,7 +18,7 @@ jobs:
       - name: Install
         run: |
           pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
-          pip install numpy einops pyyaml soundfile beartype rotary-embedding-torch packaging
+          pip install numpy einops pyyaml soundfile beartype rotary-embedding-torch packaging librosa
           git clone --depth 1 https://github.com/ZFTurbo/Music-Source-Separation-Training "$RUNNER_TEMP/mss"
       - name: Probe
         run: python scripts/probe_duet_models.py "$RUNNER_TEMP/probe" "$RUNNER_TEMP/mss"
