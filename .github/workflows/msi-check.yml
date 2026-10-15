@@ -1,0 +1,54 @@
+# MSI 패키지 빠른 점검 (실제 앱 빌드 없이 더미 폴더로 빌드 → 설치 → 업그레이드 → 삭제)
+name: MSI check
+
+on:
+  push:
+    branches: [main]
+    paths: ["packaging/windows/msi/**", ".github/workflows/msi-check.yml"]
+  workflow_dispatch:
+
+jobs:
+  msi:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install WiX
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          wix --version
+      - name: Dummy app folder
+        run: |
+          New-Item -ItemType Directory -Force dist\MRMaker\_internal\sub | Out-Null
+          Copy-Item "$env:WINDIR\System32\where.exe" dist\MRMaker\MRMaker.exe
+          "hello" | Set-Content dist\MRMaker\_internal\a.txt
+          "deep" | Set-Content dist\MRMaker\_internal\sub\b.dat
+      - name: Build MSI (1.0.0 and 1.0.1)
+        run: |
+          foreach ($v in "1.0.0", "1.0.1") {
+            wix build packaging\windows\msi\MRMaker.wxs -arch x64 -sval -d Version=$v -d SourceDir=dist\MRMaker `
+              -d IconPath=assets\icon.ico -o out\MRMaker-$v.msi
+            if ($LASTEXITCODE -ne 0) { throw "wix build failed ($v)" }
+          }
+          Get-ChildItem out | Format-Table Name, Length
+      - name: Install, upgrade, uninstall
+        run: |
+          $dir = Join-Path $env:LOCALAPPDATA "Programs\MR MAKER (MSI)"
+          $p = Start-Process msiexec -ArgumentList "/i", "out\MRMaker-1.0.0.msi", "/qn", "/l*v", "i1.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content i1.log -Tail 60; throw "install failed $($p.ExitCode)" }
+          if (-not (Test-Path "$dir\MRMaker.exe")) { throw "exe not installed" }
+          if (-not (Test-Path "$dir\_internal\sub\b.dat")) { throw "subfolder not installed" }
+          $lnk = Join-Path ([Environment]::GetFolderPath("Programs")) "MR MAKER.lnk"
+          if (-not (Test-Path $lnk)) { throw "start menu shortcut missing" }
+          $p = Start-Process msiexec -ArgumentList "/i", "out\MRMaker-1.0.1.msi", "/qn", "/l*v", "i2.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content i2.log -Tail 60; throw "upgrade failed $($p.ExitCode)" }
+          $n = @(Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall |
+                 Get-ItemProperty | Where-Object { $_.DisplayName -eq "MR MAKER for ui.clover" }).Count
+          if ($n -ne 1) { throw "expected one ARP entry after upgrade, got $n" }
+          $p = Start-Process msiexec -ArgumentList "/x", "out\MRMaker-1.0.1.msi", "/qn", "/l*v", "u.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content u.log -Tail 60; throw "uninstall failed $($p.ExitCode)" }
+          if (Test-Path "$dir\MRMaker.exe") { throw "files left after uninstall" }
+          if (Test-Path $lnk) { throw "shortcut left after uninstall" }
+          "MSI install / upgrade / uninstall OK"
