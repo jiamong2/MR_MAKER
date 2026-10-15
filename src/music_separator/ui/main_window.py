@@ -26,7 +26,7 @@ from .widgets import (COLUMN_GAP, HEADER_WIDTH, ROW_SPACING, ChipButton, DropZon
                       PathMenu, PlayButton, TimeRuler, TrackRow, TracksPanel, Viewport, glow, icon_button, label, repolish,
                       text_button)
 from ..export import ExportJob, ExportOptions, ExportSource
-from .workers import (ExportThread, KeyThread, LoadedAudio, LoadThread, PipelineThread, SeparationThread,
+from .workers import (DuetThread, ExportThread, KeyThread, LoadedAudio, LoadThread, PipelineThread, SeparationThread,
                       UpdateCheckThread, UpdateDownloadThread, YouTubeLoadThread,
                       YouTubeUpdateThread)
 
@@ -178,6 +178,7 @@ class MainWindow(QMainWindow):
         self.last_error: Optional[str] = None
         self._seeking = False
         self.pipeline_thread: Optional[PipelineThread] = None
+        self.duet_thread: Optional[DuetThread] = None
         self.yt_thread: Optional[YouTubeLoadThread] = None
         self.yt_update_thread: Optional[YouTubeUpdateThread] = None
         self.last_prep = None                  # 홈 작업: 마지막으로 디코딩한 입력 (재사용)
@@ -697,6 +698,8 @@ class MainWindow(QMainWindow):
             ("AI 모델 가져오기 (오프라인 설치)…", self.import_models, None),
             ("YouTube 기능 업데이트", self.update_youtube, None),
             ("새 버전 확인", lambda: self.check_for_update(manual=True), None),
+            None,
+            ("실험실: 듀엣 분리 (남/여)…", self.start_duet_job, None),
             ("로그 폴더 열기", lambda: paths.open_in_file_manager(paths.logs_dir()), None),
             None,
             (f"{APP_NAME} 정보", self.show_about, None),
@@ -812,7 +815,7 @@ class MainWindow(QMainWindow):
     def busy(self) -> bool:
         # 스레드 참조는 finished 처리(완료 시그널 처리 이후)에서 해제되므로 참조 존재 여부로 판단
         return any(t is not None for t in (self.load_thread, self.sep_thread, self.export_thread,
-                                            self.pipeline_thread, self.yt_thread))
+                                            self.pipeline_thread, self.yt_thread, self.duet_thread))
 
     def _thread_finished(self, attr: str):
         t = getattr(self, attr)
@@ -1915,6 +1918,103 @@ class MainWindow(QMainWindow):
             QProcess.startDetached(sys.executable, args)
             self.close()
 
+    # ===================================================== [실험] 듀엣 ===
+    def start_duet_job(self):
+        if self.busy():
+            QMessageBox.information(self, "듀엣 분리", "진행 중인 작업이 끝난 뒤 다시 시도해 주세요.")
+            return
+        h = self.home
+        kind = h.source_kind()
+        source = h.source_text() if kind in ("file", "youtube") else ""
+        if not source:
+            start = self.settings.value("last_dir", str(Path.home() / "Music"))
+            path, _ = QFileDialog.getOpenFileName(self, "듀엣 곡 선택", start,
+                                                  "오디오 (*.mp3 *.wav *.flac *.m4a *.aac *.ogg *.opus *.aiff *.mp4 *.mov);;"
+                                                  "모든 파일 (*)")
+            if not path:
+                return
+            source, kind = path, "file"
+        if kind == "youtube" and not self._youtube_consent():
+            return
+        from .. import duet
+
+        name = Path(source).name if kind == "file" else source
+        need_dl = not models.is_installed(duet.MODEL_NAME)
+        box = QMessageBox(self)
+        box.setWindowTitle("실험실: 듀엣 분리 (남/여)")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText("듀엣 곡의 보컬을 남자 보컬 / 여자 보컬로 나눠 봅니다 (실험 기능)")
+        box.setInformativeText(
+            f"대상: {name}\n\n"
+            "• 저장되는 파일: 반주(MR), 남자 보컬, 여자 보컬\n"
+            "• 남녀가 함께 부르는 구간에 맞춘 모델이라, 번갈아 부르는 곡이나 같은 성별 듀엣은 잘 나뉘지 않을 수 있습니다.\n"
+            + ("• 처음 한 번 남/여 분리 AI 모델(약 503MB)을 내려받습니다.\n" if need_dl else "")
+            + ("• 그래픽카드 가속 없이 처리하면 곡 길이의 10배 이상 걸릴 수 있습니다.\n"
+               if self._resolve_device() == "cpu" else "")
+            + "\n시작할까요?")
+        ok = box.addButton("시작", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("취소", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is not ok:
+            return
+        device = self._resolve_device()
+        spec = pipeline.JobSpec(
+            source=source, out_dir=self.output_dir, target="mr", semitones=0,
+            fmt=self.fmt_combo.currentData() or audio_io.DEFAULT_FORMAT, preset=self.preset_key(),
+            engine=self.engine_key(), device=device, formant_vocals=True, keep_native_rate=self.keep_native_rate,
+            model_override=os.environ.get("MUSIC_SEPARATOR_FORCE_MODEL") or None)
+        prev = self.last_prep if self.last_prep is not None and pipeline.source_id_for(source) == \
+            self.last_prep.source_id else None
+        t = DuetThread(spec, self.session_dir / "jobs", prev, self.last_sep if prev else None,
+                       self.last_sep_key if prev else None, self)
+        self.duet_thread = t
+        from PySide6.QtWidgets import QProgressDialog
+
+        dlg = QProgressDialog("준비 중…", "취소", 0, 1000, self)
+        dlg.setWindowTitle("듀엣 분리 (실험)")
+        dlg.setMinimumWidth(460)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        dlg.canceled.connect(t.cancel)
+        t0 = __import__("time").monotonic()
+
+        def on_progress(f, m):
+            el = __import__("time").monotonic() - t0
+            tail = f"\n경과 {audio_io.format_time(el)}"
+            if f > 0.05 and el > 5:
+                tail += f" · 남은 시간 약 {audio_io.format_time(el / f * (1 - f))}"
+            dlg.setValue(int(f * 1000))
+            dlg.setLabelText(m + tail)
+        t.progress.connect(on_progress)
+        t.done.connect(lambda res: (dlg.close(), self._on_duet_done(res)))
+        t.failed.connect(lambda err: (dlg.close(), self._error(f"듀엣 분리에 실패했습니다.\n{err}")))
+        t.cancelled.connect(lambda: (dlg.close(), self.set_status("듀엣 분리를 취소했습니다.")))
+        t.finished.connect(lambda: (setattr(self, "duet_thread", None), t.deleteLater(), self._set_state()))
+        dlg.show()
+        t.start()
+        self._set_state()
+        self.set_status("듀엣 분리 중 (실험)…", "busy")
+
+    def _on_duet_done(self, res):
+        self.last_prep, self.last_sep, self.last_sep_key = res.prepared, res.separation, res.separation_key
+        self.set_status(f"듀엣 분리 완료 → {Path(res.files[0]).parent}")
+        if os.environ.get("MUSIC_SEPARATOR_NONINTERACTIVE"):
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle("듀엣 분리 완료 (실험)")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText("파일을 저장했습니다")
+        box.setInformativeText("\n".join(Path(f).name for f in res.files)
+                               + f"\n\n걸린 시간: {audio_io.format_time(res.seconds)}"
+                               + ("\n" + "\n".join(res.notes) if res.notes else ""))
+        open_btn = box.addButton("폴더 열기", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("닫기", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is open_btn:
+            paths.open_in_file_manager(Path(res.files[0]).parent)
+
     # ======================================================= app update ===
     def _build_update_bar(self) -> QFrame:
         bar = QFrame()
@@ -2101,6 +2201,9 @@ class MainWindow(QMainWindow):
             self.key_thread.wait(30000)
         if self.update_dl_thread is not None:
             self.update_dl_thread.cancel.set()
+        if self.duet_thread is not None:
+            self.duet_thread.cancel()
+            self.duet_thread.wait(30000)
         for t in (self.update_check_thread, self.update_dl_thread):
             if t is not None and t.isRunning():
                 t.wait(10000)

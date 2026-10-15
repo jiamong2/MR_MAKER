@@ -7,6 +7,7 @@ MR MAKER for ui.clover 배포 파일에는 다음 오픈소스가 포함됩니�
 | [Demucs](https://github.com/adefossez/demucs) (코드, 사전학습 모델 htdemucs / htdemucs_ft) | AI 음원 분리 (속도 우선, htdemucs_ft 보컬 모델은 배포 파일에 포함) | MIT |
 | BS-RoFormer 구현 (`roformer.py`) | 고급 엔진 모델 구조 | 자체 구현. 구조는 [lucidrains/BS-RoFormer](https://github.com/lucidrains/BS-RoFormer) (MIT) 와 Lu et al., *Music Source Separation with Band-Split RoPE Transformer* (2023) 를 따름 |
 | BS-RoFormer SW 가중치 (`BS-Roformer-SW.ckpt`, 배포 파일에 **포함하지 않음**, 처음 사용할 때 내려받음) | 품질 우선 보컬 분리 (기본) | 커뮤니티 공개 모델(jarredou 등 공유, [python-audio-separator](https://github.com/nomadkaraoke/python-audio-separator) 릴리스에서 내려받음). **사용 조건이 명시되어 있지 않으므로 개인 용도로만** 사용하고, 상업적 이용 전에는 권리자 확인이 필요합니다 |
+| [Chorus Male Female BS-RoFormer](https://huggingface.co/Sucial/Chorus_Male_Female_BS_RoFormer) by Sucial (`model_chorus_bs_roformer_ep_267`, 배포 파일에 **포함하지 않음**, 실험 기능을 처음 쓸 때 내려받음) | [실험] 듀엣 남/여 보컬 분리 | **CC BY-NC-SA 4.0** (비영리 사용, 출처 표시, 동일 조건) |
 | [Rubber Band Library](https://breakfastquay.com/rubberband/) 4.0 (`native/rbshift/vendor/rubberband`) | 키 조절(피치 시프트, 기본) — 별도 실행 파일 `rbshift` 로 포함 | **GPL-2.0-or-later** (rbshift 도 GPL-2.0-or-later, 소스: `native/rbshift`) |
 | [Signalsmith Stretch](https://github.com/Signalsmith-Audio/signalsmith-stretch) / [python-stretch](https://github.com/gregogiudici/python-stretch) | 키 조절 대체 엔진 (rbshift 가 없을 때) | MIT |
 | [soxr](https://github.com/dofuuz/python-soxr) / libsoxr | 고품질 리샘플링 | LGPL-2.1-or-later (동적 링크된 확장 모듈) |

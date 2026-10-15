@@ -649,3 +649,21 @@ def test_settings_are_per_build_variant(tmp_path, monkeypatch):
     w.close(); w.device_thread.wait(15000); w.deleteLater()
     s = QSettings(ini, QSettings.Format.IniFormat)
     assert s.value("cpu/preset") is None                              # 기본값은 저장하지 않음
+
+
+def test_duet_experimental_outputs(tmp_path):
+    """[실험] 듀엣 분리: MR + 남/여 보컬 3개 파일, 남+여 = 분리된 보컬 (음량 배율 공통)."""
+    from music_separator import audio_io, duet, pipeline
+
+    src = _input(tmp_path, 44100, sec=4.0)
+    spec = pipeline.JobSpec(str(src), tmp_path / "out", fmt="wav32f", model_override="demucs_unittest")
+    steps = []
+    res = duet.run(spec, tmp_path / "work", progress=lambda f, m: steps.append(f), model_name="duet_unittest")
+    names = [p.name for p in res.files]
+    assert len(names) == 3 and any("MR" in n for n in names), names
+    male = next(p for p in res.files if "남자 보컬" in p.name)
+    female = next(p for p in res.files if "여자 보컬" in p.name)
+    vocals = np.load(next(s.path for s in res.separation.stems if s.key == "vocals"))
+    m, f = audio_io.decode_audio(male, None), audio_io.decode_audio(female, None)
+    assert m.shape == f.shape == vocals.shape
+    assert max(steps) <= 1.0 and steps == sorted(steps)

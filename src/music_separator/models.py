@@ -51,6 +51,9 @@ class ModelSpec:
     file_name: str = ""    # kind == "roformer": 체크포인트 파일 이름
     sha256: str = ""
     urls: tuple = ()
+    config_name: str = ""  # kind == "roformer": ZFTurbo 형식 YAML 설정 (없으면 BS-RoFormer SW 고정 설정)
+    config_urls: tuple = ()
+    experimental: bool = False   # 실험 기능용 (일반 분리 엔진 목록에는 넣지 않음)
 
 
 MODELS: dict[str, ModelSpec] = {
@@ -92,6 +95,20 @@ MODELS: dict[str, ModelSpec] = {
         urls=("https://github.com/nomadkaraoke/python-audio-separator/releases/download/model-configs/"
               "BS-Roformer-SW.ckpt",),
     ),
+    # [실험] 듀엣 남/여 보컬 분리 — Sucial 의 BS-RoFormer (합창 남/여, CC BY-NC-SA 4.0, 비영리 사용).
+    # 보컬만 있는 트랙을 입력으로 받아 male / female 두 트랙을 냄. 중국어 합창 데이터로 학습된 실험 모델.
+    "duet_male_female": ModelSpec(
+        "duet_male_female", "BS-RoFormer 남/여 보컬 분리 (Sucial, 실험)", "", (), (), 503,
+        ("male", "female"), "",
+        kind="roformer", file_name="model_chorus_bs_roformer_ep_267_sdr_24.1275.ckpt",
+        sha256="123c00786bdbc6bd462dddb35cd21fd6ae99ab8319f93f63a8abc1012e593d94",
+        urls=("https://huggingface.co/Sucial/Chorus_Male_Female_BS_RoFormer/resolve/main/"
+              "model_chorus_bs_roformer_ep_267_sdr_24.1275.ckpt",),
+        config_name="config_chorus_male_female_bs_roformer.yaml",
+        config_urls=("https://huggingface.co/Sucial/Chorus_Male_Female_BS_RoFormer/resolve/main/"
+                     "config_chorus_male_female_bs_roformer.yaml",),
+        experimental=True,
+    ),
 }
 
 
@@ -132,6 +149,8 @@ def _installed_in(folder: Path, spec: ModelSpec) -> bool:
         return False
     if spec.kind == "roformer":
         f = folder / spec.file_name
+        if spec.config_name and not (folder / spec.config_name).is_file():
+            return False
         return f.exists() and f.stat().st_size > spec.approx_mb * 1024 * 1024 * 0.9
     return all(_sig_file(folder, s) for s in spec.sigs)
 
@@ -290,7 +309,22 @@ def _sha256(path: Path) -> str:
 
 def _download_single(spec: ModelSpec, folder: Path, progress: Optional[ProgressCb],
                      cancel: Optional[threading.Event]) -> Path:
+    if spec.config_name and not (folder / spec.config_name).is_file():
+        errs = []
+        for url in spec.config_urls:
+            try:
+                _download(url, folder / spec.config_name, "AI 모델 설정 다운로드", progress, cancel, 0, 1)
+                break
+            except DownloadCancelled:
+                raise
+            except Exception as exc:
+                errs.append(str(exc))
+        else:
+            raise ModelError("AI 모델 설정 파일을 다운로드하지 못했습니다. 인터넷 연결을 확인해 주세요.\n"
+                             + "\n".join(errs))
     dest = folder / spec.file_name
+    if dest.exists() and dest.stat().st_size > spec.approx_mb * 1024 * 1024 * 0.9:
+        return folder
     total = spec.approx_mb * 1024 * 1024
     errors = []
     urls = list(spec.urls)
@@ -343,6 +377,17 @@ def load_model(name: str):
             model.eval()
             _model_cache[name] = model
             return model
+        if name == "duet_unittest":  # 테스트용 초소형 남/여 분리 RoFormer (2-stem, 구조만 동일)
+            import torch
+
+            from .roformer import SW_CONFIG, BSRoformer
+
+            torch.manual_seed(0)
+            model = BSRoformer(**dict(SW_CONFIG, dim=16, depth=1, dim_head=8, heads=2, num_stems=2))
+            model.instruments, model.chunk, model.num_overlap = ("male", "female"), 44100 * 2, 2
+            model.eval()
+            _model_cache[name] = model
+            return model
         if name == "roformer_unittest":  # 테스트용 초소형 무작위 RoFormer (구조만 동일)
             import torch
 
@@ -360,9 +405,13 @@ def load_model(name: str):
             raise ModelError(f"모델 '{name}' 이(가) 설치되어 있지 않습니다.")
         spec = MODELS[name]
         if spec.kind == "roformer":
-            from .roformer import SW_INSTRUMENTS, load_sw
+            from .roformer import SW_INSTRUMENTS, load_checkpoint, load_sw, read_config
 
             try:
+                if spec.config_name:
+                    model = load_checkpoint(folder / spec.file_name, read_config(folder / spec.config_name))
+                    _model_cache[name] = model
+                    return model
                 model = load_sw(folder / spec.file_name)
             except Exception as exc:
                 raise ModelError(
@@ -420,6 +469,8 @@ def copy_into_user_dir(src_root: Path) -> list[str]:
             dst = user_models_dir() / spec.name
             dst.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_root / spec.file_name, dst / spec.file_name)
+            if spec.config_name and (src_root / spec.config_name).is_file():
+                shutil.copy2(src_root / spec.config_name, dst / spec.config_name)
             imported.append(spec.name)
     for name in MODELS:
         src = Path(src_root) / name

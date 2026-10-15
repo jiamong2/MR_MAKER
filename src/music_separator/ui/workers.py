@@ -362,3 +362,39 @@ class UpdateDownloadThread(QThread):
         except Exception as exc:  # noqa: BLE001
             log.exception("update download failed")
             self.failed.emit(f"업데이트 파일을 받지 못했습니다. 인터넷 연결을 확인해 주세요.\n({exc})")
+
+
+class DuetThread(QThread):
+    """[실험] 듀엣 남/여 보컬 분리."""
+
+    progress = Signal(float, str)
+    done = Signal(object)                   # duet.DuetResult
+    failed = Signal(object)                 # pipeline.PipelineError
+    cancelled = Signal()
+
+    def __init__(self, spec: pipeline.JobSpec, work_dir: Path, previous_prep=None, previous_sep=None,
+                 previous_key=None, parent=None):
+        super().__init__(parent)
+        self.spec = spec
+        self.work_dir = Path(work_dir)
+        self.prev = (previous_prep, previous_sep, previous_key)
+        self.cancel_event = threading.Event()
+
+    def cancel(self):
+        self.cancel_event.set()
+
+    def run(self):
+        from .. import duet
+
+        try:
+            res = duet.run(self.spec, self.work_dir, lambda f, m: self.progress.emit(f, m), self.cancel_event,
+                           *self.prev)
+            self.done.emit(res)
+        except pipeline.PipelineCancelled:
+            self.cancelled.emit()
+        except pipeline.PipelineError as exc:
+            log.warning("duet failed at %s: %s", exc.stage, exc)
+            self.failed.emit(exc)
+        except BaseException as exc:  # noqa: BLE001
+            log.error("duet crashed: %s\n%s", exc, traceback.format_exc())
+            self.failed.emit(pipeline.PipelineError(engine.friendly_error(exc, "처리"), "", "unknown", True))
