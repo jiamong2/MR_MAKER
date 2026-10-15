@@ -175,6 +175,20 @@ jobs:
           pip install -r requirements/common.txt -r requirements/dev.txt
           pip install --no-deps -r requirements/demucs.txt
 
+      # PyInstaller 기본 부트로더(실행 파일 껍데기)는 수많은 프로그램(악성 포함)이 공유해 백신 오탐(V3 등)이 잦다.
+      # Windows 는 부트로더를 소스에서 직접 컴파일해 고유한 실행 파일을 만든다.
+      - name: Rebuild PyInstaller bootloader from source (Windows)
+        if: env.SKIP != 'true' && runner.os == 'Windows'
+        env:
+          PYINSTALLER_COMPILE_BOOTLOADER: "1"
+        run: |
+          BL=$(python -c "import PyInstaller,os;print(os.path.join(os.path.dirname(PyInstaller.__file__),'bootloader','Windows-64bit-intel','runw.exe'))")
+          OLD=$(sha256sum "$BL" | cut -c1-16)
+          pip install --force-reinstall --no-deps --no-cache-dir --no-binary pyinstaller "$(grep -i '^pyinstaller' requirements/dev.txt)"
+          NEW=$(sha256sum "$BL" | cut -c1-16)
+          echo "bootloader stock=$OLD custom=$NEW"
+          if [ "$OLD" = "$NEW" ]; then echo "::error::bootloader was not rebuilt"; exit 1; fi
+
       - name: Unit tests (native)
         if: env.SKIP != 'true'
         run: |
