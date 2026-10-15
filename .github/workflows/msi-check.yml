@@ -49,7 +49,7 @@ jobs:
           if (@(Get-ChildItem out\1.0.0 -Filter *.cab).Count -ne 0) { Write-Host "::error::embedded build left cabs"; throw "cab" }
       - name: Install, upgrade, uninstall
         run: |
-          trap { Write-Host "::error::$_"; exit 1 }
+          trap { Write-Host "::error::$_ @line $($_.InvocationInfo.ScriptLineNumber): $($_.InvocationInfo.Line.Trim())"; exit 1 }
           function Msi($argList, $log) {
             $p = Start-Process msiexec -ArgumentList ($argList + @("/l*v", $log)) -Wait -PassThru
             if ($p.ExitCode -ne 0) {
