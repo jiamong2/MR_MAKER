@@ -667,3 +667,32 @@ def test_duet_experimental_outputs(tmp_path):
     m, f = audio_io.decode_audio(male, None), audio_io.decode_audio(female, None)
     assert m.shape == f.shape == vocals.shape
     assert max(steps) <= 1.0 and steps == sorted(steps)
+
+
+def test_speed_preset_never_uses_roformer(tmp_path, monkeypatch):
+    """처리 방식만으로 모델이 정해짐: 예전 'AI 모델' 선택값(roformer)이 남아 있어도 속도 우선은 Demucs."""
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setenv("MUSIC_SEPARATOR_NONINTERACTIVE", "1")
+    from PySide6.QtCore import QSettings
+    from PySide6.QtWidgets import QApplication
+
+    from music_separator import engine
+    from music_separator.ui import main_window, theme
+
+    app = QApplication.instance() or QApplication([])
+    theme.apply(app)
+    monkeypatch.setattr(engine, "build_variant", lambda: "cpu")
+    ini = str(tmp_path / "s.ini")
+    old = QSettings(ini, QSettings.Format.IniFormat)
+    old.setValue("cpu/engine", "roformer")
+    old.sync()
+    w = main_window.MainWindow(QSettings(ini, QSettings.Format.IniFormat))
+    try:
+        assert w.preset_key() == "speed" and w.engine_key() == "auto"
+        assert w.resolved_engine() == "demucs"
+        assert engine.required_models(w.engine_key(), "2", "speed") == ["htdemucs_ft_vocals"]
+        w.preset_btns["quality"].setChecked(True)
+        assert w.resolved_engine() == "roformer"
+    finally:
+        w.close(); w.device_thread.wait(15000); w.deleteLater()
+    assert QSettings(ini, QSettings.Format.IniFormat).value("cpu/engine") is None

@@ -23,7 +23,9 @@
   <Package Name="MR MAKER for ui.clover" Manufacturer="ui.clover" Version="$(Version)" Language="1042"
            Codepage="949" UpgradeCode="6FA73F04-BFA9-4E99-8B94-39B539B8F37D" Scope="perUser" Compressed="yes">
 
-    <MajorUpgrade DowngradeErrorMessage="이미 더 최신 버전의 MR MAKER가 설치되어 있습니다." />
+    <!-- 새 버전: 기존 버전을 자동으로 교체 / 같은 버전: 다시 설치(덮어쓰기) / 이전 버전: 설치하지 않음 -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="이미 더 최신 버전의 MR MAKER가 설치되어 있어 이전 버전은 설치하지 않습니다." />
 <?if $(EmbedCab) = "yes" ?>
     <MediaTemplate EmbedCab="yes" CompressionLevel="$(Compression)" />
 <?else?>
@@ -54,11 +56,13 @@
       </Feature>
     </Feature>
 
-    <!-- 시작 메뉴 / 바탕화면 바로가기 (사용자 프로필 설치라 HKCU 값을 키 경로로 사용) -->
+    <!-- 시작 메뉴 / 바탕화면 바로가기 (사용자 프로필 설치라 HKCU 값을 키 경로로 사용).
+         아이콘은 MRMaker.exe 에 들어 있는 것을 그대로 씀: Icon 속성을 쓰면 설치 관리자 캐시 폴더의 아이콘을 가리켜,
+         다시 설치·업데이트 후 작업 표시줄에 고정한 아이콘이 빈칸으로 바뀜 -->
     <StandardDirectory Id="ProgramMenuFolder">
       <Component Id="StartMenuShortcut" Guid="3E7B1C52-6A0D-4C7E-9E1B-2F4A8D6C0B11">
         <Shortcut Id="StartMenuLnk" Name="MR MAKER" Description="MR MAKER for ui.clover"
-                  Target="[INSTALLFOLDER]MRMaker.exe" WorkingDirectory="INSTALLFOLDER" Icon="AppIcon" />
+                  Target="[INSTALLFOLDER]MRMaker.exe" WorkingDirectory="INSTALLFOLDER" />
         <RemoveFolder Id="RemoveInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
         <RegistryValue Root="HKCU" Key="Software\MusicSeparator\Installer" Name="msi_startmenu" Type="integer"
                        Value="1" KeyPath="yes" />
@@ -67,7 +71,7 @@
     <StandardDirectory Id="DesktopFolder">
       <Component Id="DesktopShortcut" Guid="8C2D4F61-1B3E-4A9C-B7D5-6E0F2A1C9D22">
         <Shortcut Id="DesktopLnk" Name="MR MAKER" Description="MR MAKER for ui.clover"
-                  Target="[INSTALLFOLDER]MRMaker.exe" WorkingDirectory="INSTALLFOLDER" Icon="AppIcon" />
+                  Target="[INSTALLFOLDER]MRMaker.exe" WorkingDirectory="INSTALLFOLDER" />
         <RegistryValue Root="HKCU" Key="Software\MusicSeparator\Installer" Name="msi_desktop" Type="integer"
                        Value="1" KeyPath="yes" />
       </Component>

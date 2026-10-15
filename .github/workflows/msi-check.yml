@@ -30,10 +30,10 @@ jobs:
           foreach ($i in 1..3) { $b = New-Object byte[] 1500000; $rng.GetBytes($b); [IO.File]::WriteAllBytes("$PWD\dist\MRMaker\_internal\big$i.bin", $b) }
       - name: Build MSI (embedded 1.0.0 / 1.0.1, split cabs 1.0.2)
         run: |
-          function Build($v, $extra) {
+          function Build($v, $extra, $tag = $v) {
             $out = wix build packaging\windows\msi\MRMaker.wxs -arch x64 -ext WixToolset.UI.wixext -culture ko-KR `
               -d Version=$v -d SourceDir="$PWD\dist\MRMaker" -d IconPath="$PWD\assets\icon.ico" `
-              -d AssetsDir="$PWD\packaging\windows\msi" @extra -o "out\$v\MRMaker-$v.msi" 2>&1
+              -d AssetsDir="$PWD\packaging\windows\msi" @extra -o "out\$tag\MRMaker-$v.msi" 2>&1
             $out | ForEach-Object { Write-Host $_ }
             if ($LASTEXITCODE -ne 0) {
               $out | Select-Object -Last 12 | ForEach-Object { Write-Host "::error::$_" }
@@ -42,6 +42,7 @@ jobs:
           }
           Build "1.0.0" @()
           Build "1.0.1" @()
+          Build "1.0.1" @() "1.0.1b"      # 같은 버전을 다시 빌드한 것 (제품 코드가 다름)
           Build "1.0.2" @("-d", "EmbedCab=no", "-d", "MediaSize=1", "-d", "CabPrefix=MRMaker-1.0.2-windows-x64-cuda-")
           Get-ChildItem out -Recurse -File | Format-Table FullName, Length
           $cabs = @(Get-ChildItem out\1.0.2 -Filter *.cab)
@@ -73,9 +74,28 @@ jobs:
           if (-not (Test-Path $lnk)) { throw "start menu shortcut missing" }
           if (-not (Test-Path $desk)) { throw "desktop shortcut missing (default on)" }
 
+          # 바로가기 아이콘은 설치 관리자 캐시가 아니라 MRMaker.exe 를 가리켜야 함 (재설치 후 작업 표시줄 아이콘 유지)
+          $sh = New-Object -ComObject WScript.Shell
+          $icon = $sh.CreateShortcut($lnk).IconLocation
+          if ($icon -match "Installer") { throw "shortcut icon points to installer cache: $icon" }
+          "shortcut icon: '$icon'"
+
           Msi @("/i", "out\1.0.1\MRMaker-1.0.1.msi", "/qn") "i2.log"
           $c = Installed; if ($c.Count -ne 1) { throw "expected one product after upgrade, got $($c.Count)" }
           if ($wi.ProductInfo($c[0], "VersionString") -ne "1.0.1") { throw "upgrade version mismatch" }
+
+          # 이전 버전 설치 시도 → 거부되고 1.0.1 유지
+          $p = Start-Process msiexec -ArgumentList @("/i", "out\1.0.0\MRMaker-1.0.0.msi", "/qn", "/l*v", "d.log") -Wait -PassThru
+          if ($p.ExitCode -eq 0) { throw "downgrade should be refused" }
+          $c = Installed; if ($c.Count -ne 1 -or $wi.ProductInfo($c[0], "VersionString") -ne "1.0.1") { throw "downgrade changed install" }
+          "downgrade refused (exit $($p.ExitCode))"
+
+          # 같은 버전 다시 설치 (다시 빌드한 MSI) → 하나로 교체
+          Msi @("/i", "out\1.0.1b\MRMaker-1.0.1.msi", "/qn") "i2b.log"
+          $c = Installed; if ($c.Count -ne 1) { throw "same-version reinstall left $($c.Count) products" }
+          # 같은 MSI 파일 그대로 다시 설치 → 복구(덮어쓰기)
+          Msi @("/i", "out\1.0.1b\MRMaker-1.0.1.msi", "/qn", "REINSTALL=ALL", "REINSTALLMODE=vomus") "i2c.log"
+          if (-not (Test-Path "$dir\MRMaker.exe")) { throw "exe missing after repair" }
 
           # 분할 cab 버전으로 업그레이드 + 바탕화면 바로가기 끄기 (설치 화면의 선택과 같음)
           Msi @("/i", "out\1.0.2\MRMaker-1.0.2.msi", "/qn", "ADDLOCAL=Main") "i3.log"

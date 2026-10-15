@@ -84,6 +84,33 @@ Root: HKCU; Subkey: "Software\MusicSeparator"; Flags: uninsdeletekey dontcreatek
 Type: filesandordirs; Name: "{localappdata}\MusicSeparator\cache"
 
 [Code]
+// 이미 더 최신 버전이 설치되어 있으면 이전 버전으로 덮어쓰지 않음 (같은 버전·새 버전은 그대로 설치)
+function InstalledVersion(var Ver: String): Boolean;
+var
+  Key: String;
+begin
+  Key := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{6B0E4C1A-3B7D-4F8E-9C2A-7D51E0A9F3B4}_is1';
+  Result := RegQueryStringValue(HKCU, Key, 'DisplayVersion', Ver) or
+            RegQueryStringValue(HKLM64, Key, 'DisplayVersion', Ver) or
+            RegQueryStringValue(HKLM32, Key, 'DisplayVersion', Ver);
+end;
+
+function InitializeSetup(): Boolean;
+var
+  Ver: String;
+  A, B: Int64;
+begin
+  Result := True;
+  if InstalledVersion(Ver) and StrToVersion(Ver, A) and StrToVersion('{#AppVersion}', B) and
+     (ComparePackedVersion(A, B) > 0) then
+  begin
+    if not WizardSilent then
+      MsgBox('이미 더 최신 버전(' + Ver + ')의 MR MAKER가 설치되어 있어 이전 버전({#AppVersion})은 설치하지 않습니다.',
+             mbInformation, MB_OK);
+    Result := False;
+  end;
+end;
+
 function ShouldRelaunch: Boolean;
 begin
   Result := ExpandConstant('{param:relaunch|0}') = '1';

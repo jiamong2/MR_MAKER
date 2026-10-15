@@ -423,16 +423,8 @@ class MainWindow(QMainWindow):
         self.preset_hint = label("", "faint", wrap=True)
         cl.addWidget(self.preset_hint)
 
-        cl.addWidget(label("AI 모델", "sectionLabel"))
-        self.engine_combo = QComboBox()
-        for key, eng in engine.ENGINES.items():
-            self.engine_combo.addItem(icons.icon("sparkles" if key != "demucs" else "layers", theme.TEXT_DIM, 18),
-                                      eng.title, key)
-        self.engine_combo.setIconSize(QSize(18, 18))
-        self.engine_combo.currentIndexChanged.connect(lambda *_: self._on_mode(MODE))
-        cl.addWidget(self.engine_combo)
-        self.engine_hint = label("", "dim", wrap=True)
-        cl.addWidget(self.engine_hint)
+        # AI 모델은 처리 방식으로만 정함 (속도 우선 = Demucs, 품질/최고 품질 = BS-RoFormer SW).
+        # 예전엔 별도 'AI 모델' 선택이 처리 방식보다 우선해, 속도 우선이어도 느린 모델이 돌 수 있었음.
         self.model_hint = label("", "faint", wrap=True)
         cl.addWidget(self.model_hint)
 
@@ -747,10 +739,7 @@ class MainWindow(QMainWindow):
         self.device_combo.setCurrentIndex(max(0, idx))
         idx = self.fmt_combo.findData(s.value("fmt", audio_io.DEFAULT_FORMAT))
         self.fmt_combo.setCurrentIndex(max(0, idx))
-        idx = self.engine_combo.findData(s.value(vk("engine"), "auto"))
-        self.engine_combo.blockSignals(True)
-        self.engine_combo.setCurrentIndex(max(0, idx))
-        self.engine_combo.blockSignals(False)
+        s.remove(vk("engine"))          # 없어진 'AI 모델' 선택값 (처리 방식보다 우선하던 문제)
         self.keep_native_rate = s.value("keep_native", True, type=bool)
         self.formant_box.blockSignals(True)
         self.formant_box.setChecked(s.value("formant", True, type=bool))
@@ -769,7 +758,6 @@ class MainWindow(QMainWindow):
         s.setValue("out_dir", str(self.output_dir))
         vk = self._variant_key
         for key, val, default in (("preset", self.preset_key(), engine.app_default_preset()),
-                                  ("engine", self.engine_key(), "auto"),
                                   ("device", self.device_combo.currentData() or "auto", "auto")):
             if val == default:
                 s.remove(vk(key))
@@ -788,7 +776,7 @@ class MainWindow(QMainWindow):
         return f"{engine.build_variant()}/{name}"
 
     def engine_key(self) -> str:
-        return self.engine_combo.currentData() or "auto"
+        return "auto"                   # 처리 방식(preset)에 따라 자동 결정
 
     def preset_key(self) -> str:
         for k, b in self.preset_btns.items():
@@ -833,7 +821,6 @@ class MainWindow(QMainWindow):
         for b in self.preset_btns.values():
             b.setEnabled(not busy)
         self.device_combo.setEnabled(not busy)
-        self.engine_combo.setEnabled(not busy)
         for w in (self.mr_preview_btn, self.mr_save_btn, self.vocal_save_btn, self.export_sel_btn,
                   self.export_all_btn):
             w.setEnabled(has_result and not busy)
@@ -852,10 +839,6 @@ class MainWindow(QMainWindow):
         title, text = ENGINE_INFO[eng]
         self.info_title.setText(title)
         self.info_text.setText(text)
-        e = engine.ENGINES[self.engine_key()]
-        self.engine_hint.setText(e.note)
-        self.engine_hint.setProperty("role", "warn" if self.engine_key() == "roformer" else "dim")
-        repolish(self.engine_hint)
         self.preset_hint.setText(engine.PRESETS[self.preset_key()].description)
         self._on_mode_options()
         self._update_device_hint()
