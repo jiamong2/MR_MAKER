@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import sys
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -16,14 +17,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from music_separator import roformer  # noqa: E402
 
 HF = "https://huggingface.co"
+SUCIAL = f"{HF}/Sucial/Chorus_Male_Female_BS_RoFormer/resolve/main"
 CANDIDATES = {
-    "male_female_aufr33": (
-        f"{HF}/Sucial/Chorus_Male_Female_BS_RoFormer/resolve/main/bs_roformer_male_female_by_aufr33_sdr_7.2889.ckpt",
-        f"{HF}/Sucial/Chorus_Male_Female_BS_RoFormer/resolve/main/bs_roformer_male_female_by_aufr33_sdr_7.2889.yaml"),
-    "chorus_sucial_ep267": (
-        f"{HF}/Sucial/Chorus_Male_Female_BS_RoFormer/resolve/main/model_chorus_bs_roformer_ep_267_sdr_24.1275.ckpt",
-        f"{HF}/Sucial/Chorus_Male_Female_BS_RoFormer/resolve/main/model_chorus_bs_roformer.yaml"),
+    "chorus_sucial_ep267": (f"{SUCIAL}/model_chorus_bs_roformer_ep_267_sdr_24.1275.ckpt",
+                            f"{SUCIAL}/config_chorus_male_female_bs_roformer.yaml"),
 }
+
+
+def sdr(ref: np.ndarray, est: np.ndarray) -> float:
+    num = np.sum(ref ** 2)
+    den = np.sum((ref - est) ** 2)
+    return float(10 * np.log10((num + 1e-9) / (den + 1e-9)))
 
 
 def note(msg: str):
@@ -48,11 +52,26 @@ def list_repo(repo: str) -> list:
 
 def main(work: Path):
     work.mkdir(parents=True, exist_ok=True)
-    for repo in ("Sucial/Chorus_Male_Female_BS_RoFormer",):
+    import json
+
+    for q in ("male_female", "male-female", "malefemale", "male female roformer", "duet"):
         try:
-            list_repo(repo)
+            with urllib.request.urlopen(f"{HF}/api/models?search={urllib.parse.quote(q)}&limit=20") as r:
+                note(f"search '{q}': " + ", ".join(m["id"] for m in json.loads(r.read().decode())))
         except Exception as exc:  # noqa: BLE001
-            print(f"::error::list {repo}: {exc}", flush=True)
+            print(f"::error::search {q}: {exc}", flush=True)
+    # 예제 (원본 보컬 + 정답 남/여) 로 실제 분리 품질(SDR) 측정
+    import soundfile as sf
+
+    ex = {}
+    for k in ("vocals_raw", "vocals_male", "vocals_female"):
+        try:
+            ex[k], ex_sr = sf.read(fetch(f"{SUCIAL}/examples/{k}.wav", work / f"{k}.wav"), dtype="float32",
+                                   always_2d=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"::error::example {k}: {exc}", flush=True)
+    if ex:
+        note("examples: " + ", ".join(f"{k} {v.shape}" for k, v in ex.items()) + f" sr={ex_sr}")
     sr = 44100
     t = np.arange(sr * 8) / sr
     # 낮은 목소리(약 130Hz)와 높은 목소리(약 330Hz)를 흉내 낸 배음 신호 (실행 확인용, 품질 평가 아님)
@@ -75,6 +94,29 @@ def main(work: Path):
             e = [float(np.sqrt(np.mean(o ** 2))) for o in out]
             note(f"{name} LOADED OK: stems={model.num_stems} out={out.shape} rms={['%.4f' % v for v in e]} "
                  f"input_rms={float(np.sqrt(np.mean(mix ** 2))):.4f} time={time.time() - t0:.1f}s")
+            if len(ex) == 3:
+                raw = ex["vocals_raw"]
+                if raw.shape[1] == 1:
+                    raw = np.repeat(raw, 2, axis=1)
+                t0 = time.time()
+                sep = roformer.demix(model, raw, "cpu", num_overlap=cfg["num_overlap"], chunk=cfg["chunk"])
+                res = []
+                for i, inst in enumerate(model.instruments):
+                    ref_key = "vocals_male" if "male" == inst.lower() or inst.lower().startswith("male") else \
+                        ("vocals_female" if "female" in inst.lower() else None)
+                    if ref_key is None:
+                        continue
+                    ref = ex[ref_key]
+                    if ref.shape[1] == 1:
+                        ref = np.repeat(ref, 2, axis=1)
+                    n = min(len(ref), len(sep[i]))
+                    res.append(f"{inst}: SDR {sdr(ref[:n], sep[i][:n]):.2f}dB")
+                # 기준선: 아무것도 안 하고 원본을 반씩 나눴을 때
+                n = min(len(raw), len(ex["vocals_male"]))
+                base = sdr(np.repeat(ex["vocals_male"], 2, 1)[:n] if ex["vocals_male"].shape[1] == 1
+                           else ex["vocals_male"][:n], raw[:n] * 0.5)
+                note(f"{name} EXAMPLE QUALITY: {', '.join(res)} (baseline half-mix {base:.2f}dB) "
+                     f"time={time.time() - t0:.1f}s for {len(raw) / ex_sr:.1f}s audio")
         except Exception as exc:  # noqa: BLE001
             print(f"::error::{name} FAILED: {type(exc).__name__}: {str(exc)[:900]}", flush=True)
 
