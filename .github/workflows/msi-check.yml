@@ -61,7 +61,11 @@ jobs:
           $lnk = Join-Path ([Environment]::GetFolderPath("Programs")) "MR MAKER.lnk"
           $desk = Join-Path ([Environment]::GetFolderPath("Desktop")) "MR MAKER.lnk"
           $wi = New-Object -ComObject WindowsInstaller.Installer
-          function Installed { @($wi.RelatedProducts("{6FA73F04-BFA9-4E99-8B94-39B539B8F37D}")) }
+          function Installed {
+            $r = @()
+            foreach ($x in $wi.RelatedProducts("{6FA73F04-BFA9-4E99-8B94-39B539B8F37D}")) { $r += [string]$x }
+            return ,$r
+          }
 
           Msi @("/i", "out\1.0.0\MRMaker-1.0.0.msi", "/qn") "i1.log"
           if (-not (Test-Path "$dir\MRMaker.exe")) { throw "exe not installed" }
