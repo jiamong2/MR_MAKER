@@ -8,7 +8,7 @@
   - 같은 UpgradeCode 로 새 버전을 설치하면 이전 버전을 자동으로 교체
   - 설치가 끝나면 프로그램을 바로 실행 (조용한 설치 /qn 에서는 실행하지 않음)
 
-  빌드: wix build MRMaker.wxs -arch x64 -sval -d Version=1.2.8 -d SourceDir=dist\MRMaker -d IconPath=assets\icon.ico -o out.msi
+  빌드: wix build MRMaker.wxs -arch x64 -d Version=1.2.8 -d SourceDir=dist\MRMaker -d IconPath=assets\icon.ico -o out.msi
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package Name="MR MAKER for ui.clover" Manufacturer="ui.clover" Version="$(Version)"

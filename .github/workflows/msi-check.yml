@@ -28,7 +28,7 @@ jobs:
       - name: Build MSI (1.0.0 and 1.0.1)
         run: |
           foreach ($v in "1.0.0", "1.0.1") {
-            $out = wix build packaging\windows\msi\MRMaker.wxs -arch x64 -sval -d Version=$v -d SourceDir=dist\MRMaker `
+            $out = wix build packaging\windows\msi\MRMaker.wxs -arch x64 -d Version=$v -d SourceDir=dist\MRMaker `
               -d IconPath=assets\icon.ico -o out\MRMaker-$v.msi 2>&1
             $out | ForEach-Object { Write-Host $_ }
             if ($LASTEXITCODE -ne 0) {
@@ -39,6 +39,7 @@ jobs:
           Get-ChildItem out | Format-Table Name, Length
       - name: Install, upgrade, uninstall
         run: |
+          trap { Write-Host "::error::$_"; exit 1 }
           $dir = Join-Path $env:LOCALAPPDATA "Programs\MR MAKER (MSI)"
           $p = Start-Process msiexec -ArgumentList "/i", "out\MRMaker-1.0.0.msi", "/qn", "/l*v", "i1.log" -Wait -PassThru
           if ($p.ExitCode -ne 0) { Select-String -Path i1.log -Pattern "error|Return value 3" | Select-Object -Last 10 | ForEach-Object { Write-Host "::error::$($_.Line)" }; throw "install failed $($p.ExitCode)" }
