@@ -114,20 +114,25 @@ def package_windows(variant: str, skip_installer: bool):
     run([iscc, f"/DAppVersion={__version__}", f"/DSourceDir={src}", f"/DVariant={variant}",
          f"/DOutputDir={RELEASE}", ROOT / "packaging" / "windows" / "installer.iss"])
     win_sign(sorted(RELEASE.glob(f"{EXE_NAME}-{__version__}-windows-x64-{variant}-setup*.exe")))
-    if variant == "cpu":
-        build_msi(src, variant)
+    build_msi(src, variant)
 
 
 def build_msi(src: Path, variant: str):
-    """WiX v5 로 MSI 설치 파일 생성 (CPU 버전만: MSI 한 파일은 2GB 를 넘을 수 없어 CUDA 는 제외)."""
+    """WiX v5 로 MSI 설치 파일 생성. MSI 한 파일은 2GB 를 넘을 수 없어 CUDA 버전은 외부 .cab 여러 개로 나눔."""
     wix = shutil.which("wix")
     if not wix:
         print("!! WiX Toolset(wix)이 없어 MSI 는 건너뜁니다. dotnet tool install --global wix --version 5.0.2")
         return
-    out = RELEASE / f"{EXE_NAME}-{__version__}-windows-x64-{variant}.msi"
-    run([wix, "build", ROOT / "packaging" / "windows" / "msi" / "MRMaker.wxs", "-arch", "x64",
-         "-d", f"Version={__version__}", "-d", f"SourceDir={src.resolve()}",
-         "-d", f"IconPath={(ROOT / 'assets' / 'icon.ico').resolve()}", "-o", out])
+    base = f"{EXE_NAME}-{__version__}-windows-x64-{variant}"
+    out = RELEASE / f"{base}.msi"
+    msi_dir = (ROOT / "packaging" / "windows" / "msi").resolve()
+    args = [wix, "build", msi_dir / "MRMaker.wxs", "-arch", "x64", "-ext", "WixToolset.UI.wixext", "-culture", "ko-KR",
+            "-d", f"Version={__version__}", "-d", f"SourceDir={src.resolve()}",
+            "-d", f"IconPath={(ROOT / 'assets' / 'icon.ico').resolve()}", "-d", f"AssetsDir={msi_dir}"]
+    size = sum(f.stat().st_size for f in src.rglob("*") if f.is_file())
+    if size > 1800 * 1048576:     # 압축해도 2GB 를 넘을 수 있는 크기 → 외부 cab 으로 분할
+        args += ["-d", "EmbedCab=no", "-d", "MediaSize=1800", "-d", f"CabPrefix={base}-", "-d", "Compression=medium"]
+    run(args + ["-o", out])
     out.with_suffix(".wixpdb").unlink(missing_ok=True)      # 디버그용 파일은 릴리스에 올리지 않음
     print(f"msi -> {out} ({out.stat().st_size / 1048576:.0f} MB)")
     win_sign([out])

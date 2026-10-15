@@ -238,9 +238,10 @@ jobs:
           echo "MS_WIN_SIGN_PFX=$RUNNER_TEMP/cert.pfx" >> "$GITHUB_ENV"
 
       - name: Install WiX Toolset (MSI)
-        if: env.SKIP != 'true' && runner.os == 'Windows' && matrix.variant == 'cpu'
+        if: env.SKIP != 'true' && runner.os == 'Windows'
         run: |
           dotnet tool install --global wix --version 5.0.2
+          "$USERPROFILE/.dotnet/tools/wix" extension add -g WixToolset.UI.wixext/5.0.2
           echo "$USERPROFILE/.dotnet/tools" >> "$GITHUB_PATH"
 
       - name: Build

@@ -598,6 +598,11 @@ def test_updater_release_parsing():
     m = updater.parse_release(rel("v99.0.0", msi_names), "cpu", auto=True, msi=True)
     assert [x.name for x in m.assets] == ["MRMaker-99.0.0-windows-x64-cpu.msi"]           # MSI 설치본은 MSI 로
     assert not updater.parse_release(rel("v99.0.0", msi_names), "cuda", auto=True, msi=True).can_auto_install
+    cab_names = msi_names + ["MRMaker-99.0.0-windows-x64-cuda.msi", "MRMaker-99.0.0-windows-x64-cuda-2.cab",
+                             "MRMaker-99.0.0-windows-x64-cuda-1.cab"]
+    cu = updater.parse_release(rel("v99.0.0", cab_names), "cuda", auto=True, msi=True)
+    assert [x.name for x in cu.assets] == ["MRMaker-99.0.0-windows-x64-cuda.msi", "MRMaker-99.0.0-windows-x64-cuda-1.cab",
+                                           "MRMaker-99.0.0-windows-x64-cuda-2.cab"]          # 분할 cab 도 함께
     assert [x.name for x in updater.parse_release(rel("v99.0.0", msi_names), "cpu", auto=True).assets] == \
         [names[0]]                                                                          # setup 설치본은 그대로
 

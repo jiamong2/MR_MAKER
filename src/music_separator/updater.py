@@ -73,9 +73,15 @@ def installed_msi() -> bool:
 def pick_assets(release: dict, version: str, variant: str, msi: bool = False) -> list:
     """현재 설치 종류에 맞는 Windows 설치 파일 선택 (setup.exe + 분할 .bin, 또는 .msi)."""
     if msi:
-        name = f"MRMaker-{version}-windows-x64-{variant}.msi"
-        return [Asset(a["name"], a["browser_download_url"], int(a.get("size", 0)))
-                for a in release.get("assets", []) if a.get("name") == name]
+        # .msi (+ 2GB 를 넘는 CUDA 버전은 같은 폴더에 둘 외부 .cab 들)
+        base = f"MRMaker-{version}-windows-x64-{variant}"
+        out = [Asset(a["name"], a["browser_download_url"], int(a.get("size", 0)))
+               for a in release.get("assets", [])
+               if a.get("name") == f"{base}.msi" or (a.get("name", "").startswith(f"{base}-")
+                                                     and a.get("name", "").endswith(".cab"))]
+        if not any(x.name.endswith(".msi") for x in out):
+            return []
+        return sorted(out, key=lambda x: (not x.name.endswith(".msi"), x.name))
     prefix = f"MRMaker-{version}-windows-x64-{variant}-setup"
     out = []
     for a in release.get("assets", []):

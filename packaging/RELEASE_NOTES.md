@@ -5,10 +5,14 @@
 ### 설치 파일 선택
 | 컴퓨터 | 파일 |
 |---|---|
-| Windows, NVIDIA 그래픽카드(RTX 20·GTX 16 시리즈 이상) | `MRMaker-…-windows-x64-cuda-setup.exe` (+ 같은 이름의 `.bin` 파일을 같은 폴더에) |
+| Windows, NVIDIA 그래픽카드(RTX 20·GTX 16 시리즈 이상) | `MRMaker-…-windows-x64-cuda.msi` + 같은 이름으로 시작하는 `.cab` 파일들을 같은 폴더에 (또는 `…-cuda-setup.exe` + `.bin`) |
 | Windows, 그 외 | `MRMaker-…-windows-x64-cpu.msi` (권장) 또는 `MRMaker-…-windows-x64-cpu-setup.exe` |
 | Mac (M1~M4, Apple Silicon) | `MRMaker-…-macos-arm64.dmg` |
 | Mac (Intel) | `MRMaker-…-macos-x86_64.dmg` |
+
+### v1.2.9 변경 사항
+- **MSI 설치 화면 개선**: 이용 안내 → 설치 항목(바탕화면 바로가기 선택)·설치 위치 선택 → 설치 → 완료(바로 실행 선택) 순서로 진행되는 한국어 설치 화면을 추가했습니다.
+- **CUDA(GPU) 버전도 MSI 제공**: 용량이 커서 `.msi` 와 `.cab` 파일 여러 개로 나뉩니다. 모두 같은 폴더에 받은 뒤 `.msi` 를 실행해 주세요.
 
 ### v1.2.8 변경 사항
 - **MSI 설치 파일 추가 (CPU 버전)**: 백신(V3 등)이 브라우저로 받은 setup.exe 를 격리하는 경우 `MRMaker-…-windows-x64-cpu.msi` 로 설치해 주세요. 사용자 계정에 설치되며 관리자 권한이 필요 없고, 이후 업데이트도 프로그램 안에서 MSI 로 진행됩니다.
