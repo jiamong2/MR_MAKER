@@ -36,8 +36,23 @@ def fetch(url: str, dest: Path) -> Path:
     return dest
 
 
+def list_repo(repo: str) -> list:
+    import json
+
+    with urllib.request.urlopen(f"{HF}/api/models/{repo}") as r:
+        info = json.loads(r.read().decode())
+    files = [x["rfilename"] for x in info.get("siblings", [])]
+    note(f"{repo} files: {files} license={info.get('cardData', {}).get('license')}")
+    return files
+
+
 def main(work: Path):
     work.mkdir(parents=True, exist_ok=True)
+    for repo in ("Sucial/Chorus_Male_Female_BS_RoFormer",):
+        try:
+            list_repo(repo)
+        except Exception as exc:  # noqa: BLE001
+            print(f"::error::list {repo}: {exc}", flush=True)
     sr = 44100
     t = np.arange(sr * 8) / sr
     # 낮은 목소리(약 130Hz)와 높은 목소리(약 330Hz)를 흉내 낸 배음 신호 (실행 확인용, 품질 평가 아님)
