@@ -28,27 +28,31 @@ jobs:
       - name: Build MSI (1.0.0 and 1.0.1)
         run: |
           foreach ($v in "1.0.0", "1.0.1") {
-            wix build packaging\windows\msi\MRMaker.wxs -arch x64 -sval -d Version=$v -d SourceDir=dist\MRMaker `
-              -d IconPath=assets\icon.ico -o out\MRMaker-$v.msi
-            if ($LASTEXITCODE -ne 0) { throw "wix build failed ($v)" }
+            $out = wix build packaging\windows\msi\MRMaker.wxs -arch x64 -sval -d Version=$v -d SourceDir=dist\MRMaker `
+              -d IconPath=assets\icon.ico -o out\MRMaker-$v.msi 2>&1
+            $out | ForEach-Object { Write-Host $_ }
+            if ($LASTEXITCODE -ne 0) {
+              $out | Select-Object -Last 12 | ForEach-Object { Write-Host "::error::$_" }
+              throw "wix build failed ($v)"
+            }
           }
           Get-ChildItem out | Format-Table Name, Length
       - name: Install, upgrade, uninstall
         run: |
           $dir = Join-Path $env:LOCALAPPDATA "Programs\MR MAKER (MSI)"
           $p = Start-Process msiexec -ArgumentList "/i", "out\MRMaker-1.0.0.msi", "/qn", "/l*v", "i1.log" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { Get-Content i1.log -Tail 60; throw "install failed $($p.ExitCode)" }
-          if (-not (Test-Path "$dir\MRMaker.exe")) { throw "exe not installed" }
+          if ($p.ExitCode -ne 0) { Select-String -Path i1.log -Pattern "error|Return value 3" | Select-Object -Last 10 | ForEach-Object { Write-Host "::error::$($_.Line)" }; throw "install failed $($p.ExitCode)" }
+          if (-not (Test-Path "$dir\MRMaker.exe")) { Write-Host "::error::exe not installed"; throw "exe not installed" }
           if (-not (Test-Path "$dir\_internal\sub\b.dat")) { throw "subfolder not installed" }
           $lnk = Join-Path ([Environment]::GetFolderPath("Programs")) "MR MAKER.lnk"
           if (-not (Test-Path $lnk)) { throw "start menu shortcut missing" }
           $p = Start-Process msiexec -ArgumentList "/i", "out\MRMaker-1.0.1.msi", "/qn", "/l*v", "i2.log" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { Get-Content i2.log -Tail 60; throw "upgrade failed $($p.ExitCode)" }
+          if ($p.ExitCode -ne 0) { Select-String -Path i2.log -Pattern "error|Return value 3" | Select-Object -Last 10 | ForEach-Object { Write-Host "::error::$($_.Line)" }; throw "upgrade failed $($p.ExitCode)" }
           $n = @(Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall |
                  Get-ItemProperty | Where-Object { $_.DisplayName -eq "MR MAKER for ui.clover" }).Count
           if ($n -ne 1) { throw "expected one ARP entry after upgrade, got $n" }
           $p = Start-Process msiexec -ArgumentList "/x", "out\MRMaker-1.0.1.msi", "/qn", "/l*v", "u.log" -Wait -PassThru
-          if ($p.ExitCode -ne 0) { Get-Content u.log -Tail 60; throw "uninstall failed $($p.ExitCode)" }
+          if ($p.ExitCode -ne 0) { Select-String -Path u.log -Pattern "error|Return value 3" | Select-Object -Last 10 | ForEach-Object { Write-Host "::error::$($_.Line)" }; throw "uninstall failed $($p.ExitCode)" }
           if (Test-Path "$dir\MRMaker.exe") { throw "files left after uninstall" }
           if (Test-Path $lnk) { throw "shortcut left after uninstall" }
           "MSI install / upgrade / uninstall OK"
