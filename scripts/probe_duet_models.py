@@ -111,22 +111,25 @@ def main(work: Path):
             e = [float(np.sqrt(np.mean(o ** 2))) for o in out]
             note(f"{name} LOADED OK: stems={model.num_stems} out={out.shape} rms={['%.4f' % v for v in e]} "
                  f"input_rms={float(np.sqrt(np.mean(mix ** 2))):.4f} time={time.time() - t0:.1f}s")
-            if len(ex) == 3:
-                # 저장소의 예제 male/female 은 작성자가 이 모델로 vocals_raw 를 분리한 결과로 보임
-                # → 우리 구현의 출력이 그 결과와 같으면 모델을 올바르게 불러와 실행하고 있다는 뜻
-                raw = ex["vocals_raw"]
-                t0 = time.time()
-                sep = roformer.demix(model, raw, "cpu", num_overlap=cfg["num_overlap"], chunk=cfg["chunk"])
-                res = []
-                for i, inst in enumerate(model.instruments):
-                    ref = ex.get(f"vocals_{inst.lower()}")
-                    if ref is None:
-                        continue
-                    off = align(sep[i], ref)
-                    n = min(len(ref), len(sep[i]) - off)
-                    res.append(f"{inst}: offset {off} match {sdr(ref[:n], sep[i][off:off + n]):.1f}dB")
-                note(f"{name} REPRODUCE AUTHOR EXAMPLE: {'; '.join(res)} ({time.time() - t0:.0f}s for "
-                     f"{len(raw) / ex_sr:.0f}s audio)")
+            # 기준 구현(ZFTurbo/Music-Source-Separation-Training)과 같은 입력·같은 가중치로 직접 비교
+            ref_root = Path(sys.argv[2]) if len(sys.argv) > 2 else None
+            if ref_root and ref_root.is_dir():
+                import torch
+
+                sys.path.insert(0, str(ref_root))
+                from models.bs_roformer.bs_roformer import BSRoformer as RefBS
+
+                ref_model = RefBS(**{k: v for k, v in cfg["model"].items()})
+                st = torch.load(str(c), map_location="cpu", weights_only=True)
+                ref_model.load_state_dict(st.get("state_dict", st) if isinstance(st, dict) else st)
+                ref_model.eval()
+                seg = torch.from_numpy(np.ascontiguousarray(mix[: cfg["chunk"]].T))[None]
+                with torch.no_grad():
+                    a_out = ref_model(seg).numpy()[0]
+                    b_out = model(seg).numpy()[0]
+                diffs = [f"{inst}: {sdr(a_out[i], b_out[i]):.1f}dB" for i, inst in enumerate(model.instruments)]
+                note(f"{name} OURS vs REFERENCE (same chunk): {'; '.join(diffs)} "
+                     f"ref_rms={[round(float(np.sqrt(np.mean(x ** 2))), 4) for x in a_out]}")
         except Exception as exc:  # noqa: BLE001
             print(f"::error::{name} FAILED: {type(exc).__name__}: {str(exc)[:900]}", flush=True)
 
