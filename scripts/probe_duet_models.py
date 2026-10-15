@@ -112,22 +112,21 @@ def main(work: Path):
             note(f"{name} LOADED OK: stems={model.num_stems} out={out.shape} rms={['%.4f' % v for v in e]} "
                  f"input_rms={float(np.sqrt(np.mean(mix ** 2))):.4f} time={time.time() - t0:.1f}s")
             if len(ex) == 3:
-                raw, male, female = ex["vocals_raw"], ex["vocals_male"], ex["vocals_female"]
-                off = align(raw, male + female)
-                n = min(len(male), len(raw) - off)
-                seg = raw[off:off + n]
-                ok = sdr(seg, male[:n] + female[:n])
+                # 저장소의 예제 male/female 은 작성자가 이 모델로 vocals_raw 를 분리한 결과로 보임
+                # → 우리 구현의 출력이 그 결과와 같으면 모델을 올바르게 불러와 실행하고 있다는 뜻
+                raw = ex["vocals_raw"]
                 t0 = time.time()
-                sep = roformer.demix(model, seg, "cpu", num_overlap=cfg["num_overlap"], chunk=cfg["chunk"])
+                sep = roformer.demix(model, raw, "cpu", num_overlap=cfg["num_overlap"], chunk=cfg["chunk"])
                 res = []
                 for i, inst in enumerate(model.instruments):
-                    ref = male if inst.lower() == "male" else (female if inst.lower() == "female" else None)
-                    if ref is not None:
-                        res.append(f"{inst} SDR {sdr(ref[:n], sep[i][:n]):.2f}dB")
-                base_m, base_f = sdr(male[:n], seg * 0.5), sdr(female[:n], seg * 0.5)
-                note(f"{name} EXAMPLE QUALITY (offset {off} smp, raw≈male+female {ok:.1f}dB): {', '.join(res)} | "
-                     f"baseline half-mix male {base_m:.2f} female {base_f:.2f} | {time.time() - t0:.0f}s for "
-                     f"{n / ex_sr:.0f}s audio")
+                    ref = ex.get(f"vocals_{inst.lower()}")
+                    if ref is None:
+                        continue
+                    off = align(sep[i], ref)
+                    n = min(len(ref), len(sep[i]) - off)
+                    res.append(f"{inst}: offset {off} match {sdr(ref[:n], sep[i][off:off + n]):.1f}dB")
+                note(f"{name} REPRODUCE AUTHOR EXAMPLE: {'; '.join(res)} ({time.time() - t0:.0f}s for "
+                     f"{len(raw) / ex_sr:.0f}s audio)")
         except Exception as exc:  # noqa: BLE001
             print(f"::error::{name} FAILED: {type(exc).__name__}: {str(exc)[:900]}", flush=True)
 
