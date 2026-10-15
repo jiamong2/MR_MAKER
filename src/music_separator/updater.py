@@ -60,8 +60,22 @@ def installed_windows() -> bool:
     return any(Path(sys.executable).parent.glob("unins*.exe"))
 
 
-def pick_assets(release: dict, version: str, variant: str) -> list:
-    """현재 설치 종류에 맞는 Windows 설치 파일(+ 분할 .bin) 선택."""
+MSI_DIR_NAME = "MR MAKER (MSI)"     # packaging/windows/msi/MRMaker.wxs 의 INSTALLFOLDER 이름
+
+
+def installed_msi() -> bool:
+    """MSI 로 설치된 실행 파일인지."""
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return False
+    return Path(sys.executable).parent.name == MSI_DIR_NAME
+
+
+def pick_assets(release: dict, version: str, variant: str, msi: bool = False) -> list:
+    """현재 설치 종류에 맞는 Windows 설치 파일 선택 (setup.exe + 분할 .bin, 또는 .msi)."""
+    if msi:
+        name = f"MRMaker-{version}-windows-x64-{variant}.msi"
+        return [Asset(a["name"], a["browser_download_url"], int(a.get("size", 0)))
+                for a in release.get("assets", []) if a.get("name") == name]
     prefix = f"MRMaker-{version}-windows-x64-{variant}-setup"
     out = []
     for a in release.get("assets", []):
@@ -73,13 +87,13 @@ def pick_assets(release: dict, version: str, variant: str) -> list:
     return sorted(out, key=lambda a: (not a.name.endswith(".exe"), a.name))
 
 
-def parse_release(release: dict, variant: str, auto: bool) -> Optional[UpdateInfo]:
+def parse_release(release: dict, variant: str, auto: bool, msi: bool = False) -> Optional[UpdateInfo]:
     if release.get("draft") or release.get("prerelease"):
         return None
     ver = str(release.get("tag_name", "")).lstrip("vV")
     if not ver or not is_newer(ver):
         return None
-    assets = pick_assets(release, ver, variant) if auto else []
+    assets = pick_assets(release, ver, variant, msi) if auto else []
     return UpdateInfo(ver, release.get("html_url") or RELEASES_PAGE, assets)
 
 
@@ -97,7 +111,8 @@ def check(timeout: float = 8.0) -> Optional[UpdateInfo]:
 
     with _urlopen(API_LATEST, timeout) as r:
         release = json.loads(r.read().decode("utf-8"))
-    return parse_release(release, build_variant(), installed_windows())
+    msi = installed_msi()
+    return parse_release(release, build_variant(), installed_windows() or msi, msi)
 
 
 ProgressCb = Callable[[int, int], None]
@@ -131,7 +146,11 @@ def download(info: UpdateInfo, progress: Optional[ProgressCb] = None,
 
 def launch_installer(setup: Path) -> None:
     """설치 프로그램을 조용히 실행(설치가 끝나면 프로그램을 다시 켬). 호출 후 앱은 바로 종료해야 한다."""
-    args = [str(setup), "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/relaunch=1"]
+    if setup.suffix.lower() == ".msi":
+        # 기본 UI(/qb, 진행 표시만) → 설치가 끝나면 MSI 가 프로그램을 다시 실행
+        args = ["msiexec", "/i", str(setup), "/qb", "/norestart"]
+    else:
+        args = [str(setup), "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/relaunch=1"]
     flags = 0
     if sys.platform == "win32":
         flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP

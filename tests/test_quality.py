@@ -594,6 +594,12 @@ def test_updater_release_parsing():
     assert updater.parse_release(rel("v0.0.1", names), "cpu", auto=True) is None      # 구버전
     assert updater.parse_release(rel("v99.0.0", names, draft=True), "cpu", auto=True) is None
     assert updater.is_newer("1.10.0", "1.9.9") and not updater.is_newer("1.2.2", "1.2.2")
+    msi_names = names + ["MRMaker-99.0.0-windows-x64-cpu.msi"]
+    m = updater.parse_release(rel("v99.0.0", msi_names), "cpu", auto=True, msi=True)
+    assert [x.name for x in m.assets] == ["MRMaker-99.0.0-windows-x64-cpu.msi"]           # MSI 설치본은 MSI 로
+    assert not updater.parse_release(rel("v99.0.0", msi_names), "cuda", auto=True, msi=True).can_auto_install
+    assert [x.name for x in updater.parse_release(rel("v99.0.0", msi_names), "cpu", auto=True).assets] == \
+        [names[0]]                                                                          # setup 설치본은 그대로
 
 
 def test_settings_are_per_build_variant(tmp_path, monkeypatch):

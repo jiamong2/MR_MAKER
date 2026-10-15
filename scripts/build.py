@@ -114,6 +114,22 @@ def package_windows(variant: str, skip_installer: bool):
     run([iscc, f"/DAppVersion={__version__}", f"/DSourceDir={src}", f"/DVariant={variant}",
          f"/DOutputDir={RELEASE}", ROOT / "packaging" / "windows" / "installer.iss"])
     win_sign(sorted(RELEASE.glob(f"{EXE_NAME}-{__version__}-windows-x64-{variant}-setup*.exe")))
+    if variant == "cpu":
+        build_msi(src, variant)
+
+
+def build_msi(src: Path, variant: str):
+    """WiX v5 로 MSI 설치 파일 생성 (CPU 버전만: MSI 한 파일은 2GB 를 넘을 수 없어 CUDA 는 제외)."""
+    wix = shutil.which("wix")
+    if not wix:
+        print("!! WiX Toolset(wix)이 없어 MSI 는 건너뜁니다. dotnet tool install --global wix --version 5.0.2")
+        return
+    out = RELEASE / f"{EXE_NAME}-{__version__}-windows-x64-{variant}.msi"
+    run([wix, "build", ROOT / "packaging" / "windows" / "msi" / "MRMaker.wxs", "-arch", "x64",
+         "-d", f"Version={__version__}", "-d", f"SourceDir={src.resolve()}",
+         "-d", f"IconPath={(ROOT / 'assets' / 'icon.ico').resolve()}", "-o", out])
+    print(f"msi -> {out} ({out.stat().st_size / 1048576:.0f} MB)")
+    win_sign([out])
 
 
 def package_macos():

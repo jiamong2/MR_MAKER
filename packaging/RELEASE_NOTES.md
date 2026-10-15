@@ -6,9 +6,12 @@
 | 컴퓨터 | 파일 |
 |---|---|
 | Windows, NVIDIA 그래픽카드(RTX 20·GTX 16 시리즈 이상) | `MRMaker-…-windows-x64-cuda-setup.exe` (+ 같은 이름의 `.bin` 파일을 같은 폴더에) |
-| Windows, 그 외 | `MRMaker-…-windows-x64-cpu-setup.exe` |
+| Windows, 그 외 | `MRMaker-…-windows-x64-cpu.msi` (권장) 또는 `MRMaker-…-windows-x64-cpu-setup.exe` |
 | Mac (M1~M4, Apple Silicon) | `MRMaker-…-macos-arm64.dmg` |
 | Mac (Intel) | `MRMaker-…-macos-x86_64.dmg` |
+
+### v1.2.8 변경 사항
+- **MSI 설치 파일 추가 (CPU 버전)**: 백신(V3 등)이 브라우저로 받은 setup.exe 를 격리하는 경우 `MRMaker-…-windows-x64-cpu.msi` 로 설치해 주세요. 사용자 계정에 설치되며 관리자 권한이 필요 없고, 이후 업데이트도 프로그램 안에서 MSI 로 진행됩니다.
 
 ### v1.2.7 수정 사항
 - 일부 백신(V3 등)이 설치된 MRMaker.exe 를 잘못 격리하던 문제를 줄이기 위해, 실행 파일을 고유하게 빌드하도록 바꿨습니다.
