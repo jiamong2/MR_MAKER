@@ -30,6 +30,16 @@ def sdr(ref: np.ndarray, est: np.ndarray) -> float:
     return float(10 * np.log10((num + 1e-9) / (den + 1e-9)))
 
 
+def align(raw: np.ndarray, ref_sum: np.ndarray) -> int:
+    """raw 안에서 ref_sum 이 시작하는 위치(샘플)를 상호상관으로 찾음."""
+    a = raw.mean(1)[::4]
+    b = ref_sum.mean(1)[::4]
+    n = 1 << int(np.ceil(np.log2(len(a) + len(b))))
+    c = np.fft.irfft(np.fft.rfft(a, n) * np.conj(np.fft.rfft(b, n)), n)
+    lag = int(np.argmax(c[: len(a)]))
+    return lag * 4
+
+
 def note(msg: str):
     print(f"::notice::{msg}", flush=True)
 
@@ -102,28 +112,22 @@ def main(work: Path):
             note(f"{name} LOADED OK: stems={model.num_stems} out={out.shape} rms={['%.4f' % v for v in e]} "
                  f"input_rms={float(np.sqrt(np.mean(mix ** 2))):.4f} time={time.time() - t0:.1f}s")
             if len(ex) == 3:
-                raw = ex["vocals_raw"]
-                if raw.shape[1] == 1:
-                    raw = np.repeat(raw, 2, axis=1)
+                raw, male, female = ex["vocals_raw"], ex["vocals_male"], ex["vocals_female"]
+                off = align(raw, male + female)
+                n = min(len(male), len(raw) - off)
+                seg = raw[off:off + n]
+                ok = sdr(seg, male[:n] + female[:n])
                 t0 = time.time()
-                sep = roformer.demix(model, raw, "cpu", num_overlap=cfg["num_overlap"], chunk=cfg["chunk"])
+                sep = roformer.demix(model, seg, "cpu", num_overlap=cfg["num_overlap"], chunk=cfg["chunk"])
                 res = []
                 for i, inst in enumerate(model.instruments):
-                    ref_key = "vocals_male" if "male" == inst.lower() or inst.lower().startswith("male") else \
-                        ("vocals_female" if "female" in inst.lower() else None)
-                    if ref_key is None:
-                        continue
-                    ref = ex[ref_key]
-                    if ref.shape[1] == 1:
-                        ref = np.repeat(ref, 2, axis=1)
-                    n = min(len(ref), len(sep[i]))
-                    res.append(f"{inst}: SDR {sdr(ref[:n], sep[i][:n]):.2f}dB")
-                # 기준선: 아무것도 안 하고 원본을 반씩 나눴을 때
-                n = min(len(raw), len(ex["vocals_male"]))
-                base = sdr(np.repeat(ex["vocals_male"], 2, 1)[:n] if ex["vocals_male"].shape[1] == 1
-                           else ex["vocals_male"][:n], raw[:n] * 0.5)
-                note(f"{name} EXAMPLE QUALITY: {', '.join(res)} (baseline half-mix {base:.2f}dB) "
-                     f"time={time.time() - t0:.1f}s for {len(raw) / ex_sr:.1f}s audio")
+                    ref = male if inst.lower() == "male" else (female if inst.lower() == "female" else None)
+                    if ref is not None:
+                        res.append(f"{inst} SDR {sdr(ref[:n], sep[i][:n]):.2f}dB")
+                base_m, base_f = sdr(male[:n], seg * 0.5), sdr(female[:n], seg * 0.5)
+                note(f"{name} EXAMPLE QUALITY (offset {off} smp, raw≈male+female {ok:.1f}dB): {', '.join(res)} | "
+                     f"baseline half-mix male {base_m:.2f} female {base_f:.2f} | {time.time() - t0:.0f}s for "
+                     f"{n / ex_sr:.0f}s audio")
         except Exception as exc:  # noqa: BLE001
             print(f"::error::{name} FAILED: {type(exc).__name__}: {str(exc)[:900]}", flush=True)
 
