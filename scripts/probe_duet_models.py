@@ -54,12 +54,20 @@ def main(work: Path):
     work.mkdir(parents=True, exist_ok=True)
     import json
 
-    for q in ("male_female", "male-female", "malefemale", "male female roformer", "duet"):
+    for repo in ("DryPaintMan/MelBandRoformer-Duet", "oulianov/MelBandRoformer-Duet"):
         try:
-            with urllib.request.urlopen(f"{HF}/api/models?search={urllib.parse.quote(q)}&limit=20") as r:
-                note(f"search '{q}': " + ", ".join(m["id"] for m in json.loads(r.read().decode())))
+            with urllib.request.urlopen(f"{HF}/api/models/{repo}") as r:
+                info = json.loads(r.read().decode())
+            card = ""
+            try:
+                with urllib.request.urlopen(f"{HF}/{repo}/raw/main/README.md") as r:
+                    card = r.read().decode("utf-8", "replace").replace("\n", " | ")[:700]
+            except Exception:  # noqa: BLE001
+                pass
+            note(f"{repo}: files={[x['rfilename'] for x in info.get('siblings', [])]} "
+                 f"license={(info.get('cardData') or {}).get('license')} card={card}")
         except Exception as exc:  # noqa: BLE001
-            print(f"::error::search {q}: {exc}", flush=True)
+            print(f"::error::{repo}: {exc}", flush=True)
     # 예제 (원본 보컬 + 정답 남/여) 로 실제 분리 품질(SDR) 측정
     import soundfile as sf
 
@@ -81,12 +89,11 @@ def main(work: Path):
     for name, (ckpt_url, yaml_url) in CANDIDATES.items():
         try:
             y = fetch(yaml_url, work / f"{name}.yaml")
-            note(f"{name} yaml: " + y.read_text(encoding="utf-8").replace("\n", " | ")[:1500])
             c = fetch(ckpt_url, work / f"{name}.ckpt")
             sha = hashlib.sha256(c.read_bytes()).hexdigest()
             note(f"{name} ckpt size={c.stat().st_size} sha256={sha}")
             cfg = roformer.read_config(y)
-            note(f"{name} parsed: instruments={cfg['instruments']} all={cfg['all_instruments']} chunk={cfg['chunk']} "
+            print(f"{name} parsed: instruments={cfg['instruments']} all={cfg['all_instruments']} chunk={cfg['chunk']} "
                  f"overlap={cfg['num_overlap']} model_keys={sorted(cfg['model'])}")
             model = roformer.load_checkpoint(c, cfg)
             t0 = time.time()
