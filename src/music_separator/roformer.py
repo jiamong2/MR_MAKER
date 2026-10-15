@@ -72,14 +72,14 @@ class Rotary(nn.Module):
 
 
 class Attention(nn.Module):
-    def __init__(self, dim, heads, dim_head, rotary: Rotary):
+    def __init__(self, dim, heads, dim_head, rotary: Rotary, gates: bool = True):
         super().__init__()
         self.heads = heads
         inner = heads * dim_head
         self.rotary_embed = rotary
         self.norm = RMSNorm(dim)
         self.to_qkv = nn.Linear(dim, inner * 3, bias=False)
-        self.to_gates = nn.Linear(dim, heads)
+        self.to_gates = nn.Linear(dim, heads) if gates else None   # 예전 구현으로 학습된 모델에는 없음
         self.to_out = nn.Sequential(nn.Linear(inner, dim, bias=False))
 
     def forward(self, x):
@@ -88,7 +88,8 @@ class Attention(nn.Module):
         q = self.rotary_embed.rotate(q)
         k = self.rotary_embed.rotate(k)
         out = F.scaled_dot_product_attention(q, k, v)
-        out = out * rearrange(self.to_gates(x), "b n h -> b h n 1").sigmoid()
+        if self.to_gates is not None:
+            out = out * rearrange(self.to_gates(x), "b n h -> b h n 1").sigmoid()
         return self.to_out(rearrange(out, "b h n d -> b n (h d)"))
 
 
@@ -105,9 +106,9 @@ class FeedForward(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, dim, depth, heads, dim_head, rotary):
+    def __init__(self, dim, depth, heads, dim_head, rotary, gates=True):
         super().__init__()
-        self.layers = nn.ModuleList([nn.ModuleList([Attention(dim, heads, dim_head, rotary), FeedForward(dim)])
+        self.layers = nn.ModuleList([nn.ModuleList([Attention(dim, heads, dim_head, rotary, gates), FeedForward(dim)])
                                      for _ in range(depth)])
 
     def forward(self, x):
@@ -153,17 +154,19 @@ class BSRoformer(nn.Module):
     def __init__(self, dim, *, depth, stereo=True, num_stems=1, time_transformer_depth=1,
                  freq_transformer_depth=1, linear_transformer_depth=0, freqs_per_bands=(), dim_head=64,
                  heads=8, stft_n_fft=2048, stft_hop_length=512, stft_win_length=2048, mask_estimator_depth=2,
-                 mlp_expansion_factor=4):
+                 mlp_expansion_factor=4, gates=True, skip_connection=False, stft_normalized=False, **_train_only):
         super().__init__()
         if linear_transformer_depth:
             raise ValueError("linear transformer 는 지원하지 않습니다")
+        if skip_connection or stft_normalized:
+            raise ValueError("skip_connection / stft_normalized 모델은 지원하지 않습니다")
         self.audio_channels = 2 if stereo else 1
         self.num_stems = num_stems
         time_rot = Rotary(dim_head)
         freq_rot = Rotary(dim_head)
         self.layers = nn.ModuleList([
-            nn.ModuleList([Transformer(dim, time_transformer_depth, heads, dim_head, time_rot),
-                           Transformer(dim, freq_transformer_depth, heads, dim_head, freq_rot)])
+            nn.ModuleList([Transformer(dim, time_transformer_depth, heads, dim_head, time_rot, gates),
+                           Transformer(dim, freq_transformer_depth, heads, dim_head, freq_rot, gates)])
             for _ in range(depth)])
         self.final_norm = RMSNorm(dim)
         self.n_fft, self.hop, self.win = stft_n_fft, stft_hop_length, stft_win_length
@@ -215,6 +218,44 @@ def load_sw(path) -> BSRoformer:
         state = state["state_dict"]
     model.load_state_dict(state, strict=True)
     model.eval()
+    return model
+
+
+# ---- 다른 BS-RoFormer 체크포인트 (ZFTurbo/Music-Source-Separation-Training 형식 YAML 설정) ----
+
+def read_config(path) -> dict:
+    """ZFTurbo 형식 YAML → {model: {...}, instruments: [...], chunk, sample_rate, num_overlap}."""
+    import yaml
+
+    class _Loader(yaml.SafeLoader):
+        pass
+    _Loader.add_constructor("tag:yaml.org,2002:python/tuple", lambda l, n: tuple(l.construct_sequence(n)))
+    cfg = yaml.load(open(path, encoding="utf-8").read(), Loader=_Loader) or {}
+    model = dict(cfg.get("model") or {})
+    if isinstance(model.get("freqs_per_bands"), list):
+        model["freqs_per_bands"] = tuple(model["freqs_per_bands"])
+    training, audio, infer = cfg.get("training") or {}, cfg.get("audio") or {}, cfg.get("inference") or {}
+    instruments = list(training.get("instruments") or [])
+    target = training.get("target_instrument")
+    if model.get("num_stems", 1) == 1 and target:
+        instruments = [target]
+    return {"model": model, "instruments": instruments, "all_instruments": list(training.get("instruments") or []),
+            "chunk": int(audio.get("chunk_size") or SW_CHUNK), "sample_rate": int(audio.get("sample_rate") or 44100),
+            "num_overlap": int(infer.get("num_overlap") or 2)}
+
+
+def load_checkpoint(ckpt_path, config: dict) -> BSRoformer:
+    """설정(dict)대로 BS-RoFormer 를 만들고 가중치를 읽음. 어텐션 게이트 유무는 가중치에서 자동 판별."""
+    state = torch.load(str(ckpt_path), map_location="cpu", weights_only=True)
+    if isinstance(state, dict) and "state_dict" in state:
+        state = state["state_dict"]
+    gates = any(".to_gates." in k for k in state)
+    model = BSRoformer(**dict(config["model"], gates=gates))
+    model.load_state_dict(state, strict=True)
+    model.eval()
+    model.instruments = tuple(config["instruments"])
+    model.chunk = config["chunk"]
+    model.num_overlap = config["num_overlap"]
     return model
 
 
