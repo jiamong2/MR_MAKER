@@ -696,3 +696,30 @@ def test_speed_preset_never_uses_roformer(tmp_path, monkeypatch):
     finally:
         w.close(); w.device_thread.wait(15000); w.deleteLater()
     assert QSettings(ini, QSettings.Format.IniFormat).value("cpu/engine") is None
+
+
+def test_home_original_option_rules(tmp_path, monkeypatch):
+    """'분리 없이 저장': YouTube 는 항상, 파일은 키를 조절했을 때만 선택 가능."""
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from music_separator.ui import home, theme
+
+    app = QApplication.instance() or QApplication([])
+    theme.apply(app)
+    h = home.HomePage()
+    f = tmp_path / "a.wav"
+    f.write_bytes(b"x")
+    h.set_file(f)
+    assert not h.orig_box.isEnabled() and h.target() == "mr"
+    h.key.setValue(3)
+    assert h.orig_box.isEnabled()
+    h.orig_box.setChecked(True)
+    assert h.target() == "original" and h.start_btn.text() == "원본 저장 시작"
+    h.key.setValue(0)
+    assert not h.orig_box.isEnabled() and not h.orig_box.isChecked() and h.target() == "mr"
+    h.url.setText("https://youtu.be/dQw4w9WgXcQ")
+    assert h.orig_box.isEnabled()
+    h.orig_box.setChecked(True)
+    assert h.target() == "original"
+    h.deleteLater()

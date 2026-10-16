@@ -778,8 +778,8 @@ class HomePage(QWidget):
         self.mr_card.toggled.connect(lambda on: on and self.targetChanged.emit("mr"))
         lay.addWidget(self.target_box)
         # YouTube 입력일 때만: 분리하지 않고 받은 오디오를 그대로(키 조절은 적용) 저장
+        # YouTube: 항상 선택 가능 (원본 오디오 받기) / 파일: 키를 조절했을 때만 (원곡에 키만 바꿔 저장)
         self.orig_box = QCheckBox("분리하지 않고 원본 오디오 그대로 저장")
-        self.orig_box.setToolTip("YouTube에서 받은 오디오를 보컬/반주 분리 없이 저장합니다. 키 조절은 그대로 적용됩니다.")
         self.orig_box.setCursor(Qt.CursorShape.PointingHandCursor)
         self.orig_box.toggled.connect(self._orig_toggled)
         self.orig_box.hide()
@@ -972,19 +972,35 @@ class HomePage(QWidget):
             self.active_badge.hide()
             self.input_hint.setText("")
         self.input_hint.setVisible(bool(self.input_hint.text()))
-        if not hasattr(self, "orig_box"):
+        if not hasattr(self, "orig_box") or not hasattr(self, "key"):
             return
-        self.orig_box.setVisible(url_active)
+        file_mode = kind == "file"
+        key_on = self.key.value() != 0
+        self.orig_box.setVisible(url_active or file_mode)
+        if url_active:
+            self.orig_box.setText("분리하지 않고 원본 오디오 그대로 저장")
+            self.orig_box.setToolTip("YouTube에서 받은 오디오를 보컬/반주 분리 없이 저장합니다. 키 조절은 그대로 적용됩니다.")
+        elif key_on:
+            self.orig_box.setText("분리하지 않고 원곡에 키 조절만 적용해 저장")
+            self.orig_box.setToolTip("보컬/반주 분리 없이 원곡 전체의 키만 바꿔 저장합니다.")
+        else:
+            if file_mode and self.orig_box.isChecked():      # 키를 원래대로 돌리면 선택도 해제
+                self.orig_box.blockSignals(True)
+                self.orig_box.setChecked(False)
+                self.orig_box.blockSignals(False)
+            self.orig_box.setText("분리하지 않고 원곡에 키 조절만 적용해 저장 (키를 조절하면 선택할 수 있습니다)")
+            self.orig_box.setToolTip("파일 입력은 키를 조절했을 때만 선택할 수 있습니다.")
         status = getattr(self, "status", None)
         busy = status is not None and not status.isHidden()
         orig = self.original_mode()
         for c in (self.vocal_card, self.mr_card):
             c.setEnabled(not busy and not orig)
-        self.orig_box.setEnabled(not busy)
+        self.orig_box.setEnabled(not busy and (url_active or key_on))
         self._update_start_text()
 
     def original_mode(self) -> bool:
-        return self.source_kind() == "youtube" and self.orig_box.isChecked()
+        kind = self.source_kind()
+        return self.orig_box.isChecked() and (kind == "youtube" or (kind == "file" and self.key.value() != 0))
 
     def target(self) -> str:
         if self.original_mode():
@@ -1013,6 +1029,7 @@ class HomePage(QWidget):
     # --------------------------------------------------------------- 키 ---
     def _key_changed(self, v: int):
         self._update_key_note()
+        self._refresh_source()          # 파일 입력의 '분리 없이 저장'은 키를 조절했을 때만 선택 가능
         self.keyChanged.emit(v)
 
     def set_key(self, v: int):
@@ -1021,6 +1038,7 @@ class HomePage(QWidget):
         self.key.blockSignals(False)
         self.key.update()
         self._update_key_note()
+        self._refresh_source()
 
     def _update_key_note(self):
         v = self.key.value()

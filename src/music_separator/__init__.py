@@ -9,4 +9,4 @@ BUNDLE_ID = "io.github.musicseparator.app"   # macOS 번들 ID (이전 버전 �
 APP_ID = "MusicSeparator"
 ORG_NAME = "MusicSeparator"
 DATA_DIR_NAME = "Music Separator"      # macOS ~/Library/Application Support/<이름>
-__version__ = "1.3.1"
+__version__ = "1.3.2"
