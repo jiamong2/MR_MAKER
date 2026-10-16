@@ -95,22 +95,7 @@ MODELS: dict[str, ModelSpec] = {
         urls=("https://github.com/nomadkaraoke/python-audio-separator/releases/download/model-configs/"
               "BS-Roformer-SW.ckpt",),
     ),
-    # [실험] 화음 따기 ① 메인/화음(백보컬) 분리 — frazer & becruily 의 BS-RoFormer 카라오케 모델
-    # (가중치 사용 조건 미표기 → 앱에 넣지 않고 처음 쓸 때 작성자 저장소에서 내려받음). 메인 보컬(Vocals) 하나만
-    # 추정하고, 화음 = 입력(보컬 트랙) − 메인 보컬.
-    "karaoke_lead": ModelSpec(
-        "karaoke_lead", "BS-RoFormer 메인/화음 분리 (frazer & becruily, 실험)", "", (), (), 195,
-        ("vocals",), "",
-        kind="roformer", file_name="bs_roformer_karaoke_frazer_becruily.ckpt",
-        sha256="eb90ee24c1154d83fbcfd27e96182f19e061557cc6e4746953125e08c29389f9",
-        urls=("https://huggingface.co/becruily/bs-roformer-karaoke/resolve/main/"
-              "bs_roformer_karaoke_frazer_becruily.ckpt",),
-        config_name="config_karaoke_frazer_becruily.yaml",
-        config_urls=("https://huggingface.co/becruily/bs-roformer-karaoke/resolve/main/"
-                     "config_karaoke_frazer_becruily.yaml",),
-        experimental=True,
-    ),
-    # [실험] 화음 따기 ② 보컬 음정 추적 RMVPE (RVC-Project, MIT)
+    # [실험] 화음 따기: 보컬 음정 추적 RMVPE (RVC-Project, MIT)
     "rmvpe": ModelSpec(
         "rmvpe", "RMVPE 보컬 음정 추적", "", (), (), 173, (), "",
         kind="rmvpe", file_name="rmvpe.pt",
@@ -398,17 +383,6 @@ def load_model(name: str):
             torch.manual_seed(0)
             srcs = ["drums", "bass", "other", "vocals"] + (["guitar", "piano"] if name.endswith("6") else [])
             model = BagOfModels([HDemucs(channels=4, sources=srcs)])
-            model.eval()
-            _model_cache[name] = model
-            return model
-        if name == "karaoke_unittest":  # 테스트용 초소형 메인/화음 분리 RoFormer (1-stem, 구조만 동일)
-            import torch
-
-            from .roformer import SW_CONFIG, BSRoformer
-
-            torch.manual_seed(0)
-            model = BSRoformer(**dict(SW_CONFIG, dim=16, depth=1, dim_head=8, heads=2, num_stems=1))
-            model.instruments, model.chunk, model.num_overlap = ("vocals",), 44100 * 2, 2
             model.eval()
             _model_cache[name] = model
             return model

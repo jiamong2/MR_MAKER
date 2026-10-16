@@ -1,11 +1,11 @@
-# 화음 따기(메인/화음 분리 + 음정 추적) 모델 점검 (실험 기능 개발용)
+# 화음 따기(두 성부 음정 추적) 점검 (실험 기능 개발용)
 name: Probe harmony models
 
 on:
   push:
     branches: [main]
     paths: ["scripts/probe_harmony.py", ".github/workflows/probe-harmony.yml", "src/music_separator/rmvpe.py",
-            "src/music_separator/transcribe.py"]
+            "src/music_separator/transcribe.py", "src/music_separator/harmony.py"]
   workflow_dispatch:
 
 jobs:
@@ -19,10 +19,15 @@ jobs:
       - name: Install
         run: |
           pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
-          pip install numpy einops pyyaml soundfile soxr beartype rotary-embedding-torch packaging librosa
-          git clone --depth 1 https://github.com/ZFTurbo/Music-Source-Separation-Training "$RUNNER_TEMP/mss"
+          pip install -r requirements/common.txt
+          pip install --no-deps -r requirements/demucs.txt
+          pip install soundfile librosa
           git clone --depth 1 https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI "$RUNNER_TEMP/rvc"
       - name: Probe
-        env:
-          SKIP_KARAOKE_REF: "1"
-        run: python scripts/probe_harmony.py "$RUNNER_TEMP/probe" "$RUNNER_TEMP/mss" "$RUNNER_TEMP/rvc"
+        run: python scripts/probe_harmony.py "$RUNNER_TEMP/probe" "$RUNNER_TEMP/rvc"
+      - name: Harmony unit tests
+        if: always()
+        run: |
+          pip install pytest
+          pytest -q tests/test_harmony.py -rfE --tb=short 2>&1 | tee pytest.log
+          tail -30 pytest.log | tr '\n' '|' | cut -c1-3500 | sed 's/^/::notice title=pytest::/'

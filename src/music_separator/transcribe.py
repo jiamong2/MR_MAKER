@@ -1,8 +1,12 @@
 """음정 곡선(f0) → 음표 → MIDI 파일 (화음 따기용, numpy 만 사용).
 
-입력: 10ms 간격의 f0(Hz, 0 = 무성)와 같은 간격의 음량(dBFS).
+두 성부 나누기: 프레임마다 찾은 음정 두 개(큰 목소리, 두 번째 목소리)를 높이 순서로 위/아래 성부에 넣음.
+한 목소리만 나는 곳은 위 성부 (이어지던 음이면 그 성부에 그대로).
+배음 마스크: 음정의 배음 자리(주파수에 비례하는 폭)만 통과시키는 STFT 마스크.
+
+음표 정리 입력: 10ms 간격의 음정(또는 f0, Hz)과 같은 간격의 음량(dBFS).
 1. 소리가 있는 구간: f0 > 0 이고 음량이 기준 이상 (분리 후 조금 남은 다른 목소리는 기준 아래라 무시)
-2. 20ms 이하의 짧은 끊김은 이어 붙임 (같은 음 안의 순간적인 끊김)
+2. 30ms 이하의 짧은 끊김은 이어 붙임 (같은 음 안의 순간적인 끊김, 앞뒤 높이가 1반음 안쪽일 때)
 3. 곡 전체의 튜닝(A4 = 440Hz 에서 벗어난 정도)을 추정해 보정
 4. 비브라토를 줄인 곡선(90ms 이동 평균)에서 반음의 0.7배 이상 벗어나면 음이 바뀐 것으로 보고,
    바뀐 위치는 두 음의 가운데를 지나는 지점으로 잡음. 각 음의 높이는 그 구간 음정의 중앙값
@@ -20,7 +24,7 @@ import numpy as np
 
 FPS = 100
 MIN_NOTE = 0.07          # 초
-MAX_GAP = 0.02           # 초
+MAX_GAP = 0.03           # 초
 SMOOTH = 0.09            # 초
 HYSTERESIS = 0.7         # 반음
 PITCH_RANGE = (28, 100)  # MIDI (E1 ~ E7) 밖은 버림
@@ -139,19 +143,26 @@ def _merge_short(m: np.ndarray, segs: list, min_len: int) -> list:
 
 
 def notes_from_f0(f0: np.ndarray, db: Optional[np.ndarray] = None, gate_db=-60.0, tuning: float = 0.0,
-                  fps: int = FPS, min_note: float = MIN_NOTE, max_gap: float = MAX_GAP, smooth: float = SMOOTH,
-                  hysteresis: float = HYSTERESIS) -> list:
-    """f0(Hz, 10ms 간격) → 음표 목록. gate_db: 숫자 하나 또는 프레임별 기준 (db 가 이보다 작으면 무성)."""
-    f0 = np.asarray(f0, dtype=np.float64)
-    n = len(f0)
+                  **kw) -> list:
+    """f0(Hz, 10ms 간격, 0 = 무성) → 음표 목록."""
+    return notes_from_pitch(hz_to_midi(f0), db, gate_db, tuning, **kw)
+
+
+def notes_from_pitch(midi: np.ndarray, db: Optional[np.ndarray] = None, gate_db=-60.0, tuning: float = 0.0,
+                     fps: int = FPS, min_note: float = MIN_NOTE, max_gap: float = MAX_GAP, smooth: float = SMOOTH,
+                     hysteresis: float = HYSTERESIS) -> list:
+    """음정(MIDI 실수, NaN = 무성, 10ms 간격) → 음표 목록.
+    gate_db: 숫자 하나 또는 프레임별 기준 (db 가 이보다 작으면 무성)."""
+    pm = np.asarray(midi, dtype=np.float64)
+    n = len(pm)
     if n == 0:
         return []
     db = np.zeros(n) if db is None else np.asarray(db, dtype=np.float64)[:n]
     if len(db) < n:
         db = np.pad(db, (0, n - len(db)), constant_values=-120.0)
     gate = np.broadcast_to(np.asarray(gate_db, dtype=np.float64), (n,))
-    voiced = (f0 > 0) & (db >= gate)
-    m = hz_to_midi(np.where(voiced, f0, 0.0)) - tuning
+    voiced = np.isfinite(pm) & (db >= gate)
+    m = np.where(voiced, pm, np.nan) - tuning
 
     # 짧은 끊김 이어 붙이기 (앞뒤 음 높이가 1반음 안쪽일 때만)
     gap = int(round(max_gap * fps))
@@ -189,6 +200,66 @@ def notes_from_f0(f0: np.ndarray, db: Optional[np.ndarray] = None, gate_db=-60.0
             continue
         vel = int(np.clip(np.round(100 + 1.5 * (float(np.median(db[a:b])) - ref)), 25, 120))
         out.append(Note(a / fps, b / fps, p, vel))
+    return out
+
+
+def assign_voices(a: np.ndarray, b: np.ndarray, fps: int = FPS, link: float = 0.05,
+                  hold: float = 0.3) -> tuple:
+    """프레임별 음정 두 개(a: 큰 목소리, b: 두 번째, MIDI 실수, NaN = 없음) → (위 성부, 아래 성부).
+
+    둘 다 있으면 높은 음이 위, 낮은 음이 아래. 하나만 있으면
+    1) 직전(link 초 안)까지 1반음 안쪽으로 이어지던 성부가 있으면 그 성부 (긴 음이 중간에 옮겨 가지 않게)
+    2) 두 성부가 최근(hold 초 안)까지 함께 있었으면 마지막 높이가 더 가까운 성부
+    3) 그 밖에는 위 성부 (한 사람만 부르는 부분)"""
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    n = min(len(a), len(b))
+    up = np.full(n, np.nan)
+    lo = np.full(n, np.nan)
+    last = {"up": (-10 ** 9, np.nan), "lo": (-10 ** 9, np.nan)}      # (프레임, 높이)
+    link_f, hold_f = max(1, int(round(link * fps))), int(round(hold * fps))
+    for t in range(n):
+        x, y = a[t], b[t]
+        fx, fy = np.isfinite(x), np.isfinite(y)
+        if fx and fy:
+            hi, low = (x, y) if x >= y else (y, x)
+            up[t], lo[t] = hi, low
+            last["up"], last["lo"] = (t, hi), (t, low)
+            continue
+        if not (fx or fy):
+            continue
+        p = x if fx else y
+        cont = {k: t - last[k][0] <= link_f and abs(p - last[k][1]) < 1.0 for k in ("up", "lo")}
+        if cont["up"] != cont["lo"]:
+            line = "up" if cont["up"] else "lo"
+        elif cont["up"] or (t - last["up"][0] <= hold_f and t - last["lo"][0] <= hold_f):
+            line = "up" if abs(p - last["up"][1]) <= abs(p - last["lo"][1]) else "lo"
+        else:
+            line = "up"
+        (up if line == "up" else lo)[t] = p
+        last[line] = (t, p)
+    return up, lo
+
+
+def harmonic_mask(f0: np.ndarray, freqs: np.ndarray, rel: float = 0.03, max_frac: Optional[float] = None,
+                  block: int = 2048) -> np.ndarray:
+    """(주파수, 프레임) 마스크 0~1. 각 프레임 f0 의 배음 h·f0 둘레 ±max(2칸, rel·h·f0) 는 1, 바깥 한 칸에 걸쳐 0 으로.
+    max_frac: 폭 상한 (f0 의 비율, 배음 사이 틈을 남겨 다른 목소리 자리를 지킴). f0 ≤ 0 인 프레임은 0."""
+    f0 = np.asarray(f0, dtype=np.float64)
+    freqs = np.asarray(freqs, dtype=np.float64)
+    df = float(freqs[1] - freqs[0])
+    out = np.zeros((len(freqs), len(f0)), np.float32)
+    idx = np.nonzero(f0 > 0)[0]
+    F = freqs[:, None]
+    for s in range(0, len(idx), block):
+        cols = idx[s:s + block]
+        f = f0[cols][None, :]
+        h = np.maximum(1.0, np.round(F / f))
+        d = np.abs(F - h * f)
+        half = np.maximum(2.0 * df, rel * h * f)
+        if max_frac is not None:
+            half = np.minimum(half, np.maximum(df, max_frac * f))
+        out[:, cols] = np.clip((half + df - d) / df, 0.0, 1.0)
     return out
 
 

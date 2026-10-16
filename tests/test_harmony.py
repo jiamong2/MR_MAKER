@@ -142,31 +142,31 @@ def _song(tmp_path, sec=4.0, sr=44100):
 
 
 def test_harmony_outputs_audio_and_midi(isolated):
-    """MR + 메인 + 화음 (오디오 3개, 메인 + 화음 = 분리된 보컬) + MIDI 2개, 진행률은 0→1 로만 증가."""
+    """MR + 위/아래 성부 오디오 (위 + 아래 = 분리된 보컬) + MIDI 2개, 진행률은 0→1 로만 증가."""
     pytest.importorskip("torch")
     from music_separator import audio_io, harmony, pipeline
 
     tmp = isolated
     spec = pipeline.JobSpec(str(_song(tmp)), tmp / "out", fmt="wav32f", model_override="demucs_unittest")
     steps = []
-    res = harmony.run(spec, tmp / "work", progress=lambda f, m: steps.append(f), model_name="karaoke_unittest",
-                      pitch_model="rmvpe_unittest")
+    res = harmony.run(spec, tmp / "work", progress=lambda f, m: steps.append(f), model_name="rmvpe_unittest")
     names = [p.name for p in res.files]
     assert len(names) == 5, names
     assert sum(n.endswith(".wav") for n in names) == 3 and sum(n.endswith(".mid") for n in names) == 2
-    lead = next(p for p in res.files if "메인 보컬" in p.name and p.suffix == ".wav")
-    back = next(p for p in res.files if "화음" in p.name and p.suffix == ".wav")
+    up = next(p for p in res.files if "위 성부" in p.name and p.suffix == ".wav")
+    lo = next(p for p in res.files if "아래 성부" in p.name and p.suffix == ".wav")
     mr = next(p for p in res.files if "MR" in p.name)
     vocals = np.load(next(s.path for s in res.separation.stems if s.key == "vocals"))
-    a, b = audio_io.decode_audio(lead, None), audio_io.decode_audio(back, None)
+    a, b = audio_io.decode_audio(up, None), audio_io.decode_audio(lo, None)
     assert a.shape == b.shape == vocals.shape
     assert np.max(np.abs(a + b - vocals)) < 1e-5
     orig = audio_io.decode_audio(Path(spec.source), None)
     assert np.max(np.abs(audio_io.decode_audio(mr, None) + vocals - orig)) < 1e-4
-    for kind in ("lead", "back"):
+    for kind in ("up", "lo"):
         notes, bpm, _ = transcribe.read_midi_notes(res.midi[kind].read_bytes())
         assert bpm == pytest.approx(120.0) and len(notes) == res.counts[kind]
         assert all(0 <= n.start < n.end <= 4.1 for n in notes)
+    assert 0.0 <= res.together <= 1.0
     assert max(steps) <= 1.0 and steps == sorted(steps)
     assert not list((tmp / "work").glob("harmony_*"))          # 임시 파일 정리
 
@@ -183,17 +183,85 @@ def test_harmony_reuses_previous_separation_and_cancels(isolated):
     msgs = []
     res = harmony.run(spec, tmp / "work", lambda f, m: msgs.append(m), None, first.prepared, first.separation,
                       pipeline.Pipeline(spec, tmp / "work").separation_key(first.prepared),
-                      model_name="karaoke_unittest", pitch_model="rmvpe_unittest")
+                      model_name="rmvpe_unittest")
     assert any("이전 분리 결과" in m for m in msgs)
     assert res.separation is first.separation
     ev = threading.Event()
 
-    def cancel_at_split(f, m):
-        if "메인 보컬 / 화음" in m:
+    def cancel_at_pitch(f, m):
+        if "첫 번째 목소리" in m:
             ev.set()
     with pytest.raises(pipeline.PipelineCancelled):
-        harmony.run(spec, tmp / "work2", cancel_at_split, ev, model_name="karaoke_unittest",
-                    pitch_model="rmvpe_unittest")
+        harmony.run(spec, tmp / "work2", cancel_at_pitch, ev, model_name="rmvpe_unittest")
+    assert not list((tmp / "work2").glob("harmony_*"))
+
+
+def _tone(f0, sec, sr, n_harm=12, amp=0.3):
+    t = np.arange(int(sec * sr)) / sr
+    return sum(amp / k * np.sin(2 * np.pi * f0 * k * t) for k in range(1, n_harm + 1)).astype(np.float32)
+
+
+def test_second_voice_found_after_cancelling_first():
+    """큰 목소리(A3)의 배음을 지우면 작은 목소리(E4)의 배음은 남음."""
+    pytest.importorskip("torch")
+    from music_separator import harmony
+
+    sr = 16000
+    a, b = _tone(220.0, 2.0, sr), _tone(329.63, 2.0, sr, amp=0.15)
+    n = 1 + len(a) // 160
+    res = harmony.cancel_harmonics(a + b, np.full(n, 220.0))
+    spec = np.abs(np.fft.rfft(res[sr // 2: sr // 2 + 8192] * np.hanning(8192)))
+    freqs = np.fft.rfftfreq(8192, 1 / sr)
+
+    def level(f):
+        return spec[np.abs(freqs - f) < 6].max()
+    for k in (1, 2, 3):
+        assert level(220.0 * k) < 0.05 * level(329.63)               # A 배음은 지워짐
+    assert level(329.63) > 0.5 * np.abs(np.fft.rfft(b[sr // 2: sr // 2 + 8192] * np.hanning(8192))).max()
+
+
+def test_split_audio_gives_each_voice_and_sums_back():
+    pytest.importorskip("torch")
+    from music_separator import harmony
+
+    sr = 44100
+    lo_t, up_t = _tone(196.0, 2.0, sr), _tone(246.94, 2.0, sr)       # G3 + B3
+    vocals = np.stack([lo_t + up_t] * 2, axis=1)
+    n = 1 + len(vocals) // 441
+    up, lo = harmony.split_audio(vocals, np.full(n, 246.94), np.full(n, 196.0), sr)
+    assert np.max(np.abs(up + lo - vocals)) < 1e-5
+    mid = slice(sr // 2, 3 * sr // 2)
+
+    def corr(x, y):
+        return float(np.dot(x, y) / np.sqrt(np.dot(x, x) * np.dot(y, y)))
+    assert corr(up[mid, 0], up_t[mid]) > 0.9 and corr(lo[mid, 0], lo_t[mid]) > 0.9
+    solo, rest = harmony.split_audio(vocals, np.full(n, 246.94), np.zeros(n), sr)   # 한 성부만 → 전부 위
+    assert np.max(np.abs(rest)) < 1e-4
+
+
+def test_assign_voices_upper_lower_and_continuity():
+    nan = np.nan
+    a = np.array([60, 60, 60, 60, 60, 60, 60, nan, nan, 55, 55], float)
+    b = np.array([64, 64, nan, 64, 64, nan, nan, nan, nan, nan, nan], float)
+    up, lo = transcribe.assign_voices(a, b)
+    assert list(up[:2]) == [64, 64] and list(lo[:2]) == [60, 60]
+    assert np.isnan(up[2]) and lo[2] == 60                     # 아래 음이 이어지는 중 → 아래 성부에 그대로
+    assert lo[5] == 60 and lo[6] == 60
+    up2, lo2 = transcribe.assign_voices(np.r_[np.full(50, 57.0)], np.full(50, np.nan))
+    assert np.all(up2 == 57) and np.all(np.isnan(lo2))         # 한 사람만 → 위 성부
+    up3, lo3 = transcribe.assign_voices(np.array([67.0, 59.0]), np.array([59.0, 67.0]))
+    assert list(up3) == [67, 67] and list(lo3) == [59, 59]     # 큰 목소리 순서와 상관없이 높이 순
+
+
+def test_harmonic_mask_shape():
+    freqs = np.fft.rfftfreq(1024, 1 / 16000)
+    m = transcribe.harmonic_mask(np.array([200.0, 0.0]), freqs, 0.03)
+    assert m.shape == (513, 2) and np.all(m[:, 1] == 0)
+    on = [int(round(200 * k / freqs[1])) for k in (1, 2, 5, 10)]
+    assert all(m[i, 0] == 1.0 for i in on)
+    assert m[int(round(300 / freqs[1])), 0] == 0.0             # 배음 사이
+    capped = transcribe.harmonic_mask(np.array([200.0]), freqs, 0.5, max_frac=0.2)
+    assert capped[int(round(1100 / freqs[1])), 0] == 0.0         # 폭 상한 → 배음 사이 틈 유지
 
 
 def test_obsolete_duet_model_removed(isolated):
