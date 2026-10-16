@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import sys
 import time
 import types
@@ -30,12 +31,32 @@ RMVPE_URL = f"{HF}/lj1995/VoiceConversionWebUI/resolve/main/rmvpe.pt"
 SUCIAL = f"{HF}/Sucial/Chorus_Male_Female_BS_RoFormer/resolve/main/examples"
 
 
+RESULTS: list = []
+
+
 def note(msg: str):
-    print(f"::notice::{msg}", flush=True)
+    """결과 한 줄 (GitHub 는 단계마다 주석을 10개까지만 보여 주므로 마지막에 묶어서 냄)."""
+    print(msg, flush=True)
+    RESULTS.append(msg)
+
+
+def flush_notes():
+    buf = ""
+    for line in RESULTS:
+        if len(buf) + len(line) > 3500:
+            print(f"::notice::{buf}", flush=True)
+            buf = ""
+        buf += (" ‖ " if buf else "") + line
+    if buf:
+        print(f"::notice::{buf}", flush=True)
 
 
 def err(msg: str):
     print(f"::error::{msg}", flush=True)
+
+
+class _Skip(Exception):
+    pass
 
 
 def fetch(url: str, dest: Path) -> Path:
@@ -113,6 +134,8 @@ def main(work: Path, mss_root: Path, rvc_root: Path):
              f"overlap={cfg['num_overlap']} model={ {k: v for k, v in cfg['model'].items() if k != 'freqs_per_bands'} }")
         kmodel = roformer.load_checkpoint(c, cfg)
         note(f"karaoke LOADED OK (strict): stems={kmodel.num_stems} instruments={kmodel.instruments}")
+        if os.environ.get("SKIP_KARAOKE_REF"):
+            raise _Skip()
         sys.path.insert(0, str(mss_root))
         from models.bs_roformer.bs_roformer import BSRoformer as RefBS
 
@@ -137,6 +160,8 @@ def main(work: Path, mss_root: Path, rvc_root: Path):
              f"(max abs diff {float(np.max(np.abs(a - b))):.2e}); chunk time ours={t_ours:.1f}s ref={t_ref:.1f}s; "
              f"→ CPU 1분 곡 약 {60 / (cfg['chunk'] / 44100) * 2 * t_ours:.0f}s (overlap 2) / "
              f"{60 / (cfg['chunk'] / 44100) * 4 * t_ours:.0f}s (overlap 4)")
+    except _Skip:
+        note("karaoke reference comparison skipped (done before: 43.0 dB)")
     except Exception as exc:  # noqa: BLE001
         import traceback
 
@@ -239,9 +264,9 @@ def main(work: Path, mss_root: Path, rvc_root: Path):
             g = gate[: len(f0)] if k in ("lead", "back") else -55.0
             res[k] = transcribe.notes_from_f0(f0[:n], db[:n], g if np.ndim(g) == 0 else g[:n], tuning)
         rng = {k: (min(x.pitch for x in v), max(x.pitch for x in v)) if v else None for k, v in res.items()}
-        note(f"notes: " + ", ".join(f"{k}={len(v)} range={rng[k]}" for k, v in res.items()) + f" tuning={tuning:+.2f}")
+        note("notes: " + ", ".join(f"{k}={len(v)} range={rng[k]}" for k, v in res.items()) + f" tuning={tuning:+.2f}")
         for k in ("male", "female", "lead", "back"):
-            print(k, [(round(x.start, 2), round(x.end - x.start, 2), x.pitch) for x in res[k][:40]], flush=True)
+            note(f"{k} notes: " + " ".join(f"{x.start:.2f}/{x.end - x.start:.2f}/{x.pitch}" for x in res[k][:45]))
     except Exception as exc:  # noqa: BLE001
         import traceback
 
@@ -250,4 +275,7 @@ def main(work: Path, mss_root: Path, rvc_root: Path):
 
 
 if __name__ == "__main__":
-    main(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]))
+    try:
+        main(Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]))
+    finally:
+        flush_notes()

@@ -23,4 +23,6 @@ jobs:
           git clone --depth 1 https://github.com/ZFTurbo/Music-Source-Separation-Training "$RUNNER_TEMP/mss"
           git clone --depth 1 https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI "$RUNNER_TEMP/rvc"
       - name: Probe
+        env:
+          SKIP_KARAOKE_REF: "1"
         run: python scripts/probe_harmony.py "$RUNNER_TEMP/probe" "$RUNNER_TEMP/mss" "$RUNNER_TEMP/rvc"

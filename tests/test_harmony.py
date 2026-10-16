@@ -178,7 +178,7 @@ def test_harmony_reuses_previous_separation_and_cancels(isolated):
     from music_separator import harmony, pipeline
 
     tmp = isolated
-    spec = pipeline.JobSpec(str(_song(tmp, 3.0)), tmp / "out", fmt="wav", model_override="demucs_unittest")
+    spec = pipeline.JobSpec(str(_song(tmp, 3.0)), tmp / "out", fmt="wav24", model_override="demucs_unittest")
     first = pipeline.Pipeline(spec, tmp / "work").run()
     msgs = []
     res = harmony.run(spec, tmp / "work", lambda f, m: msgs.append(m), None, first.prepared, first.separation,

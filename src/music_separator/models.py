@@ -102,7 +102,7 @@ MODELS: dict[str, ModelSpec] = {
         "karaoke_lead", "BS-RoFormer 메인/화음 분리 (frazer & becruily, 실험)", "", (), (), 195,
         ("vocals",), "",
         kind="roformer", file_name="bs_roformer_karaoke_frazer_becruily.ckpt",
-        sha256="KARAOKE_SHA256",
+        sha256="eb90ee24c1154d83fbcfd27e96182f19e061557cc6e4746953125e08c29389f9",
         urls=("https://huggingface.co/becruily/bs-roformer-karaoke/resolve/main/"
               "bs_roformer_karaoke_frazer_becruily.ckpt",),
         config_name="config_karaoke_frazer_becruily.yaml",
@@ -114,7 +114,7 @@ MODELS: dict[str, ModelSpec] = {
     "rmvpe": ModelSpec(
         "rmvpe", "RMVPE 보컬 음정 추적", "", (), (), 173, (), "",
         kind="rmvpe", file_name="rmvpe.pt",
-        sha256="RMVPE_SHA256",
+        sha256="6d62215f4306e3ca278246188607209f09af3dc77ed4232efdd069798c4ec193",
         urls=("https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/main/rmvpe.pt",),
         experimental=True,
     ),
