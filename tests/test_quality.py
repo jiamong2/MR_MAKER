@@ -723,3 +723,37 @@ def test_home_original_option_rules(tmp_path, monkeypatch):
     h.orig_box.setChecked(True)
     assert h.target() == "original"
     h.deleteLater()
+
+
+def test_home_resets_when_input_changes(tmp_path, monkeypatch):
+    """결과가 나온 뒤 다른 곡을 고르거나 선택 해제하면 처음 상태로 (키 0, 결과 숨김, [음원 추출 시작]).
+    같은 곡에서 대상만 바꾸면 [다시 추출] 유지. 곡을 고르기 전에 정한 키는 유지."""
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from music_separator.ui import home, theme
+
+    app = QApplication.instance() or QApplication([])
+    theme.apply(app)
+    h = home.HomePage()
+    a, b = tmp_path / "a.wav", tmp_path / "b.wav"
+    a.write_bytes(b"x")
+    b.write_bytes(b"x")
+    h.key.setValue(2)                      # 곡 고르기 전에 키를 먼저 정함
+    h.set_file(a)
+    assert h.key.value() == 2
+    h.show_result("완료", "a", "")
+    assert h.start_btn.text() == "다시 추출"
+    h.set_target("vocals")                 # 같은 곡, 대상만 변경
+    assert h.start_btn.text() == "다시 추출" and not h.result.isHidden()
+    h.set_file(b)                          # 다른 곡
+    assert h.start_btn.text() == "음원 추출 시작" and h.result.isHidden() and h.key.value() == 0
+    assert h.target() == "vocals"          # 보컬만/반주만 선택은 유지
+    h.key.setValue(-3)
+    h.show_result("완료", "b", "")
+    h._clear_file()                        # 선택 해제
+    assert h.start_btn.text() == "음원 추출 시작" and h.result.isHidden() and h.key.value() == 0
+    h.show_error("오류", "msg", True, False, False)
+    h.url.setText("https://youtu.be/dQw4w9WgXcQ")
+    assert h.error.isHidden() and h.start_btn.text() == "음원 추출 시작"
+    h.deleteLater()

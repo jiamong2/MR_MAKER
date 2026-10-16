@@ -11,8 +11,8 @@ from typing import Optional
 
 from PySide6.QtCore import QProcess, QSettings, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QGuiApplication, QKeySequence, QShortcut
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame,
-                               QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow,
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+                               QFileDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow,
                                QMessageBox, QProgressBar, QPushButton, QScrollArea, QScrollBar, QSizePolicy, QSlider,
                                QStackedWidget, QVBoxLayout, QWidget)
 
@@ -117,6 +117,13 @@ class SettingsDialog(QDialog):
                             "0dBFS 를 넘는 경우에만 고정 배율로 음량을 살짝 낮추고, 리미터·EQ·노멀라이즈는 쓰지 않습니다.",
                             "faint", wrap=True))
         lay.addSpacing(6)
+        lay.addWidget(label("알림", "sectionLabel"))
+        self.sound_box = QCheckBox("작업이 끝나면 알림음 울리기 (다른 창을 보고 있을 때)")
+        self.sound_box.setChecked(win.settings.value("done_sound", True, type=bool))
+        self.sound_box.toggled.connect(lambda v: win.settings.setValue("done_sound", bool(v)))
+        lay.addWidget(self.sound_box)
+        lay.addWidget(label("작업이 끝나면 작업 표시줄의 MR MAKER 아이콘도 깜빡여 알려 줍니다.", "faint", wrap=True))
+        lay.addSpacing(6)
         lay.addWidget(label("AI 모델", "sectionLabel"))
         mrow = QHBoxLayout()
         mrow.addWidget(label(f"{paths.user_models_dir()}", "dim", wrap=True), 1)
@@ -179,6 +186,9 @@ class MainWindow(QMainWindow):
         self._seeking = False
         self.pipeline_thread: Optional[PipelineThread] = None
         self.duet_thread: Optional[DuetThread] = None
+        self.preview_mixer: Optional[Mixer] = None      # 홈 완료 화면 미리 듣기 (저장한 파일)
+        self.preview_player: Optional[Player] = None
+        self._preview_path: Optional[Path] = None
         self.yt_thread: Optional[YouTubeLoadThread] = None
         self.yt_update_thread: Optional[YouTubeUpdateThread] = None
         self.last_prep = None                  # 홈 작업: 마지막으로 디코딩한 입력 (재사용)
@@ -1058,6 +1068,7 @@ class MainWindow(QMainWindow):
         self.sep_thread.progress.connect(self._on_progress)
         self.sep_thread.notice.connect(self._on_notice)
         self.sep_thread.done.connect(self._on_separated)
+        self.sep_thread.done.connect(lambda *_: self._notify_done())
         self.sep_thread.failed.connect(self._on_sep_failed)
         self.sep_thread.cancelled.connect(self._on_sep_cancelled)
         self.sep_thread.finished.connect(lambda: (self._thread_finished("sep_thread"), self._work_finished()))
@@ -1514,6 +1525,10 @@ class MainWindow(QMainWindow):
     def toggle_play(self):
         if self.mixer.length == 0:
             return
+        if self.pages.currentIndex() == 0 and self.preview_player is not None and self.home.result.isVisible():
+            self._toggle_preview()        # 홈 완료 화면에서는 스페이스바 = 미리 듣기
+            return
+        self._stop_preview()
         if self.player.playing:
             self.player.pause()
         elif not self.player.play():
@@ -1540,6 +1555,12 @@ class MainWindow(QMainWindow):
         self.seek_fraction(self.seek.value() / 10000)
 
     def _tick(self):
+        if self.preview_player is not None:
+            if self.home.result.isHidden() or self.pages.currentIndex() != 0:
+                self._stop_preview()
+            else:
+                self.home.result.set_preview(self.preview_player.playing, self.preview_player.display_seconds(),
+                                             self.preview_mixer.duration)
         self.play_btn.set_playing(self.player.playing)
         if self.mixer.length == 0:
             return
@@ -1577,8 +1598,11 @@ class MainWindow(QMainWindow):
         h.status.fastRequested.connect(lambda: self.restart_home_job("speed"))
         h.result.openFolder.connect(self._open_job_folder)
         h.result.openFile.connect(self._open_job_file)
-        h.result.showAdvanced.connect(self.show_advanced)
-        h.result.newJob.connect(self._home_new_job)
+        h.result.showAdvanced.connect(lambda: (self._stop_preview(), self.show_advanced()))
+        h.result.previewToggle.connect(self._toggle_preview)
+        h.result.previewSeek.connect(self._seek_preview)
+        h.inputChanged.connect(self._stop_preview)
+        h.result.newJob.connect(lambda: (self._stop_preview(), self._home_new_job()))
         h.error.retry.connect(lambda: self.start_home_job())
         h.error.fast.connect(lambda: self.start_home_job(preset_override="speed"))
         h.error.update_youtube.connect(self.update_youtube)
@@ -1639,6 +1663,7 @@ class MainWindow(QMainWindow):
     def start_home_job(self, preset_override: Optional[str] = None):
         if self.busy():
             return
+        self._stop_preview()
         h = self.home
         kind = h.source_kind()
         if kind not in ("file", "youtube"):
@@ -1760,7 +1785,10 @@ class MainWindow(QMainWindow):
         title = {"mr": "반주(MR) 파일을 저장했습니다", "vocals": "보컬 파일을 저장했습니다",
                  "original": "원본 오디오를 저장했습니다"}.get(
             self._job_spec.target, "파일을 저장했습니다")
+        self._stop_preview()
+        self.home.result.set_preview(False, 0.0, 0.0)
         self.home.show_result(title, "<br>".join(lines), "\n".join(detail))
+        self._notify_done()
         self._adopt_pipeline_result(res)
         self.set_status(f"홈 작업 완료 → {Path(exp.files[0]).parent if exp.files else self.output_dir}")
         log.info("home job report: %s", rep)
@@ -1774,6 +1802,7 @@ class MainWindow(QMainWindow):
         fast = bool(getattr(err, "can_use_fast_model", False)) and self._job_spec.preset != "speed"
         self.home.show_error(title, str(err), bool(getattr(err, "retryable", True)), fast,
                              bool(getattr(err, "can_update_youtube", False)))
+        self._notify_done(failed=True)
         self.set_status("홈 작업 실패", "error")
 
     def _on_home_cancelled(self):
@@ -1901,6 +1930,65 @@ class MainWindow(QMainWindow):
             QProcess.startDetached(sys.executable, args)
             self.close()
 
+    # ================================================ 완료 화면 미리 듣기 ===
+    def _toggle_preview(self):
+        if not (self.last_job and self.last_job.files):
+            return
+        path = Path(self.last_job.files[0])
+        if self.preview_player is None or self._preview_path != path:
+            self._stop_preview()
+            if not path.exists():
+                self._error(f"저장한 파일을 찾을 수 없습니다:\n{path}")
+                return
+            QGuiApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                rate = audio_io.probe_audio(path).sample_rate or audio_io.SAMPLE_RATE
+                data = audio_io.decode_audio(path, None)
+            except Exception as exc:  # noqa: BLE001
+                log.exception("preview decode failed")
+                self._error(f"미리 듣기를 준비하지 못했습니다.\n({exc})")
+                return
+            finally:
+                QGuiApplication.restoreOverrideCursor()
+            self.preview_mixer = Mixer(rate)
+            self.preview_mixer.set_tracks([Track("preview", data)])
+            self.preview_player = Player(self.preview_mixer)
+            self._preview_path = path
+        self.player.pause()
+        if self.preview_player.playing:
+            self.preview_player.pause()
+        elif not self.preview_player.play():
+            self._error(self.preview_player.last_error or "재생할 수 없습니다.")
+
+    def _seek_preview(self, frac: float):
+        if self.preview_mixer is not None:
+            self.preview_mixer.seek_seconds(frac * self.preview_mixer.duration)
+
+    def _stop_preview(self):
+        if self.preview_player is not None:
+            self.preview_player.shutdown()
+        self.preview_player = self.preview_mixer = None
+        self._preview_path = None
+        if hasattr(self, "home"):
+            self.home.result.set_preview(False, 0.0, 0.0)
+
+    # ===================================================== 작업 완료 알림 ===
+    def _notify_done(self, failed: bool = False):
+        """창을 내려 두었거나 다른 창을 보고 있으면 작업 표시줄 아이콘을 깜빡이고 알림음을 냄."""
+        if os.environ.get("MUSIC_SEPARATOR_NONINTERACTIVE") or self.isActiveWindow():
+            return
+        QApplication.alert(self, 0)
+        if self.settings.value("done_sound", True, type=bool):
+            try:
+                if sys.platform == "win32":
+                    import winsound
+
+                    winsound.MessageBeep(winsound.MB_ICONHAND if failed else winsound.MB_ICONASTERISK)
+                else:
+                    QApplication.beep()
+            except Exception:  # noqa: BLE001
+                pass
+
     # ===================================================== [실험] 듀엣 ===
     def start_duet_job(self):
         if self.busy():
@@ -1972,7 +2060,8 @@ class MainWindow(QMainWindow):
             dlg.setLabelText(m + tail)
         t.progress.connect(on_progress)
         t.done.connect(lambda res: (dlg.close(), self._on_duet_done(res)))
-        t.failed.connect(lambda err: (dlg.close(), self._error(f"듀엣 분리에 실패했습니다.\n{err}")))
+        t.failed.connect(lambda err: (dlg.close(), self._notify_done(failed=True),
+                                      self._error(f"듀엣 분리에 실패했습니다.\n{err}")))
         t.cancelled.connect(lambda: (dlg.close(), self.set_status("듀엣 분리를 취소했습니다.")))
         t.finished.connect(lambda: (setattr(self, "duet_thread", None), t.deleteLater(), self._set_state()))
         dlg.show()
@@ -1982,6 +2071,7 @@ class MainWindow(QMainWindow):
 
     def _on_duet_done(self, res):
         self.last_prep, self.last_sep, self.last_sep_key = res.prepared, res.separation, res.separation_key
+        self._notify_done()
         self.set_status(f"듀엣 분리 완료 → {Path(res.files[0]).parent}")
         if os.environ.get("MUSIC_SEPARATOR_NONINTERACTIVE"):
             return
@@ -2194,6 +2284,7 @@ class MainWindow(QMainWindow):
             self.device_thread.wait(15000)
         self._save_settings()
         self.timer.stop()
+        self._stop_preview()
         self.player.shutdown()
         self.mixer.clear()
         self.result = None

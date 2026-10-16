@@ -11,8 +11,9 @@ from typing import Optional
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import (QAbstractButton, QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
-                               QProgressBar, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractButton, QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
+                               QLineEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSlider, QVBoxLayout,
+                               QWidget)
 
 from .. import APP_BRAND, APP_SHORT, audio_io, pitch, youtube
 from . import icons, theme
@@ -513,6 +514,8 @@ class StatusPanel(QFrame):
 
 
 class ResultPanel(QFrame):
+    previewToggle = Signal()
+    previewSeek = Signal(float)             # 0 ~ 1
     openFolder = Signal()
     openFile = Signal()
     showAdvanced = Signal()
@@ -541,12 +544,28 @@ class ResultPanel(QFrame):
         lay.addWidget(self.files)
         self.detail = label("", "dim", wrap=True)
         lay.addWidget(self.detail)
+        # 미리 듣기 (저장한 파일을 바로 재생)
+        prow = QHBoxLayout()
+        prow.setSpacing(10)
+        self.prev_btn = icon_button("play", "저장한 파일 미리 듣기", 40, 16, "square", theme.ACCENT_2)
+        self.prev_btn.clicked.connect(self.previewToggle)
+        self.prev_slider = QSlider(Qt.Orientation.Horizontal)
+        self.prev_slider.setRange(0, 1000)
+        self.prev_slider.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.prev_slider.sliderReleased.connect(lambda: self.previewSeek.emit(self.prev_slider.value() / 1000))
+        self.prev_time = label("미리 듣기", "dim")
+        self.prev_time.setMinimumWidth(96)
+        prow.addWidget(self.prev_btn)
+        prow.addWidget(self.prev_slider, 1)
+        prow.addWidget(self.prev_time)
+        lay.addLayout(prow)
+        self._prev_playing = None
         row = QGridLayout()
         row.setHorizontalSpacing(8)
         row.setVerticalSpacing(8)
         self.folder_btn = text_button("폴더 열기", "folder", "primary", 42)
         self.folder_btn.clicked.connect(self.openFolder)
-        self.file_btn = text_button("파일 열기", "play", None, 42, theme.TEXT_DIM)
+        self.file_btn = text_button("파일 열기", "external", None, 42, theme.TEXT_DIM)
         self.file_btn.setToolTip("기본 음악 앱으로 결과 파일을 엽니다.")
         self.file_btn.clicked.connect(self.openFile)
         self.adv_btn = text_button("고급 옵션에서 듣기", "wave", None, 42, theme.TEXT_DIM)
@@ -558,6 +577,21 @@ class ResultPanel(QFrame):
         self._grid = row
         lay.addLayout(row)
         self.set_columns(4)
+
+    def set_preview(self, playing: bool, pos: float, dur: float):
+        if playing != self._prev_playing:
+            self._prev_playing = playing
+            self.prev_btn.setIcon(icons.icon("pause" if playing else "play", theme.ACCENT_2, 16))
+            self.prev_btn.setToolTip("일시 정지" if playing else "저장한 파일 미리 듣기")
+        if not self.prev_slider.isSliderDown():
+            self.prev_slider.blockSignals(True)
+            self.prev_slider.setValue(int(1000 * pos / dur) if dur > 0 else 0)
+            self.prev_slider.blockSignals(False)
+        if dur > 0:
+            f = lambda x: f"{int(x // 60):02d}:{int(x % 60):02d}"  # noqa: E731
+            self.prev_time.setText(f"{f(pos)} / {f(dur)}")
+        else:
+            self.prev_time.setText("미리 듣기")
 
     def set_columns(self, n: int):
         for b in self._btns:
@@ -626,6 +660,7 @@ class HomePage(QWidget):
     sourceCleared = Signal()
     keyChanged = Signal(int)
     targetChanged = Signal(str)
+    inputChanged = Signal()                 # 다른 입력으로 바뀌어 이전 결과를 지웠을 때
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -947,8 +982,23 @@ class HomePage(QWidget):
             return "youtube" if youtube.video_id(t) else "invalid_url"
         return "file" if self.file_path else ""
 
+    def _check_input_change(self, kind: str):
+        """사용할 입력(파일/YouTube)이 바뀌면 이전 결과·오류를 지우고 [음원 추출 시작] 으로.
+        다른 곡으로 바뀌면 키도 0 으로 (곡마다 키가 다름). 빈 입력 → 곡 선택은 키를 유지 (키를 먼저 정한 경우)."""
+        active = self.source_text() if kind in ("file", "youtube") else ""
+        prev = getattr(self, "_active_source", "")
+        if active == prev:
+            return
+        self._active_source = active
+        if hasattr(self, "result") and (self._has_result or not self.result.isHidden() or not self.error.isHidden()):
+            self.reset_panels()
+            self.inputChanged.emit()
+        if prev and hasattr(self, "key") and self.key.value() != 0:
+            self.key.setValue(0)
+
     def _refresh_source(self):
         kind = self.source_kind()
+        self._check_input_change(kind)
         url_active = kind == "youtube"
         invalid = kind == "invalid_url"
         self.url.setProperty("active", "true" if url_active else "false")
@@ -1057,7 +1107,7 @@ class HomePage(QWidget):
         d = str(out_dir)
         if len(d) > 46:
             d = "…" + d[-44:]
-        self.foot.setText(f"2-stem 분리 · 자동 입력 감지 · 키 변경 &nbsp;|&nbsp; 출력: {fmt_label} · 저장 위치: {d} "
+        self.foot.setText(f"저장 형식: {fmt_label} &nbsp;·&nbsp; 저장 위치: {d} "
                           f"<a href='settings' style='color:{theme.ACCENT_2}; text-decoration:none;'>변경</a>")
 
     def set_busy(self, busy: bool):
