@@ -99,21 +99,27 @@ def win_sign(files: list[Path]) -> None:
 def package_windows(variant: str, skip_installer: bool):
     src = DIST / EXE_NAME
     win_sign([src / f"{EXE_NAME}.exe"])
-    zip_path = RELEASE / f"{EXE_NAME}-{__version__}-windows-x64-{variant}-portable.zip"
-    print(f"portable zip -> {zip_path}")
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as z:
-        for f in src.rglob("*"):
-            if f.is_file():
-                z.write(f, Path(EXE_NAME) / f.relative_to(src))
+    # CUDA 버전(약 5GB)은 MSI(+분할 .cab)만 만든다.
+    #  - 포터블 zip: 2GB 를 넘어 GitHub 릴리스에 올릴 수 없음 (예전엔 만들었다가 버려졌음)
+    #  - setup.exe: MSI 로 대체. 가장 느린 압축 단계라 빌드 시간을 크게 줄임
+    light = variant == "cuda"
+    if not light:
+        zip_path = RELEASE / f"{EXE_NAME}-{__version__}-windows-x64-{variant}-portable.zip"
+        print(f"portable zip -> {zip_path}")
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as z:
+            for f in src.rglob("*"):
+                if f.is_file():
+                    z.write(f, Path(EXE_NAME) / f.relative_to(src))
     if skip_installer:
         return
-    iscc = find_iscc()
-    if not iscc:
-        print("!! Inno Setup(ISCC.exe)이 없어 설치 프로그램은 건너뜁니다. https://jrsoftware.org/isdl.php")
-        return
-    run([iscc, f"/DAppVersion={__version__}", f"/DSourceDir={src}", f"/DVariant={variant}",
-         f"/DOutputDir={RELEASE}", ROOT / "packaging" / "windows" / "installer.iss"])
-    win_sign(sorted(RELEASE.glob(f"{EXE_NAME}-{__version__}-windows-x64-{variant}-setup*.exe")))
+    if not light:
+        iscc = find_iscc()
+        if not iscc:
+            print("!! Inno Setup(ISCC.exe)이 없어 설치 프로그램은 건너뜁니다. https://jrsoftware.org/isdl.php")
+        else:
+            run([iscc, f"/DAppVersion={__version__}", f"/DSourceDir={src}", f"/DVariant={variant}",
+                 f"/DOutputDir={RELEASE}", ROOT / "packaging" / "windows" / "installer.iss"])
+            win_sign(sorted(RELEASE.glob(f"{EXE_NAME}-{__version__}-windows-x64-{variant}-setup*.exe")))
     build_msi(src, variant)
 
 

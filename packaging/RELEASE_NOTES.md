@@ -5,7 +5,7 @@
 ### 설치 파일 선택
 | 컴퓨터 | 파일 |
 |---|---|
-| Windows, NVIDIA 그래픽카드(RTX 20·GTX 16 시리즈 이상) | `MRMaker-…-windows-x64-cuda.msi` + 같은 이름으로 시작하는 `.cab` 파일들을 같은 폴더에 (또는 `…-cuda-setup.exe` + `.bin`) |
+| Windows, NVIDIA 그래픽카드(RTX 20·GTX 16 시리즈 이상) | `MRMaker-…-windows-x64-cuda.msi` + 같은 이름으로 시작하는 `.cab` 파일들을 같은 폴더에 받은 뒤 .msi 실행 |
 | Windows, 그 외 | `MRMaker-…-windows-x64-cpu.msi` (권장) 또는 `MRMaker-…-windows-x64-cpu-setup.exe` |
 | Mac (M1~M4, Apple Silicon) | `MRMaker-…-macos-arm64.dmg` |
 | Mac (Intel) | `MRMaker-…-macos-x86_64.dmg` |

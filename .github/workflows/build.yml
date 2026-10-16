@@ -208,7 +208,7 @@ jobs:
           path: build/models
 
       - name: Install Inno Setup
-        if: env.SKIP != 'true' && runner.os == 'Windows'
+        if: env.SKIP != 'true' && runner.os == 'Windows' && matrix.variant != 'cuda'
         shell: pwsh
         run: |
           if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
