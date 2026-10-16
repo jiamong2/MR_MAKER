@@ -1636,17 +1636,7 @@ class MainWindow(QMainWindow):
             self.home.set_file_detail("오디오를 찾을 수 없는 파일입니다. 다른 파일을 선택해 주세요.")
             return
         dur = audio_io.format_time(info.duration) if info.duration else "?"
-        detail = f"{info.summary()} · {dur}"
-        if info.duration:
-            try:
-                dev = self._resolve_device()
-                est = pipeline.estimate_seconds(int(info.duration * engine.MODEL_RATE), self.resolved_engine(), dev,
-                                                self.preset_key())
-                if dev == "cpu" and est >= 120:
-                    detail += f" · 예상 처리 시간 약 {max(2, round(est / 60))}분 (그래픽카드 가속 없음)"
-            except Exception:  # noqa: BLE001 - 표시용 추정
-                log.debug("estimate failed", exc_info=True)
-        self.home.set_file_detail(detail)
+        self.home.set_file_detail(f"{info.summary()} · {dur}")
 
     def _home_steps(self, kind: str, semitones: int, target: str = "mr") -> list:
         steps = [("check", "입력 확인")]
