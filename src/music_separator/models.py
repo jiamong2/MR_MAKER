@@ -48,7 +48,7 @@ class ModelSpec:
     sources: tuple
     yaml_text: str
     kind: str = "demucs"
-    file_name: str = ""    # kind == "roformer": 체크포인트 파일 이름
+    file_name: str = ""    # kind == "roformer" / "rmvpe": 가중치 파일 이름 (파일 하나짜리 모델)
     sha256: str = ""
     urls: tuple = ()
     config_name: str = ""  # kind == "roformer": ZFTurbo 형식 YAML 설정 (없으면 BS-RoFormer SW 고정 설정)
@@ -95,18 +95,27 @@ MODELS: dict[str, ModelSpec] = {
         urls=("https://github.com/nomadkaraoke/python-audio-separator/releases/download/model-configs/"
               "BS-Roformer-SW.ckpt",),
     ),
-    # [실험] 듀엣 남/여 보컬 분리 — Sucial 의 BS-RoFormer (합창 남/여, CC BY-NC-SA 4.0, 비영리 사용).
-    # 보컬만 있는 트랙을 입력으로 받아 male / female 두 트랙을 냄. 중국어 합창 데이터로 학습된 실험 모델.
-    "duet_male_female": ModelSpec(
-        "duet_male_female", "BS-RoFormer 남/여 보컬 분리 (Sucial, 실험)", "", (), (), 503,
-        ("male", "female"), "",
-        kind="roformer", file_name="model_chorus_bs_roformer_ep_267_sdr_24.1275.ckpt",
-        sha256="123c00786bdbc6bd462dddb35cd21fd6ae99ab8319f93f63a8abc1012e593d94",
-        urls=("https://huggingface.co/Sucial/Chorus_Male_Female_BS_RoFormer/resolve/main/"
-              "model_chorus_bs_roformer_ep_267_sdr_24.1275.ckpt",),
-        config_name="config_chorus_male_female_bs_roformer.yaml",
-        config_urls=("https://huggingface.co/Sucial/Chorus_Male_Female_BS_RoFormer/resolve/main/"
-                     "config_chorus_male_female_bs_roformer.yaml",),
+    # [실험] 화음 따기 ① 메인/화음(백보컬) 분리 — frazer & becruily 의 BS-RoFormer 카라오케 모델
+    # (가중치 사용 조건 미표기 → 앱에 넣지 않고 처음 쓸 때 작성자 저장소에서 내려받음). 메인 보컬(Vocals) 하나만
+    # 추정하고, 화음 = 입력(보컬 트랙) − 메인 보컬.
+    "karaoke_lead": ModelSpec(
+        "karaoke_lead", "BS-RoFormer 메인/화음 분리 (frazer & becruily, 실험)", "", (), (), 195,
+        ("vocals",), "",
+        kind="roformer", file_name="bs_roformer_karaoke_frazer_becruily.ckpt",
+        sha256="KARAOKE_SHA256",
+        urls=("https://huggingface.co/becruily/bs-roformer-karaoke/resolve/main/"
+              "bs_roformer_karaoke_frazer_becruily.ckpt",),
+        config_name="config_karaoke_frazer_becruily.yaml",
+        config_urls=("https://huggingface.co/becruily/bs-roformer-karaoke/resolve/main/"
+                     "config_karaoke_frazer_becruily.yaml",),
+        experimental=True,
+    ),
+    # [실험] 화음 따기 ② 보컬 음정 추적 RMVPE (RVC-Project, MIT)
+    "rmvpe": ModelSpec(
+        "rmvpe", "RMVPE 보컬 음정 추적", "", (), (), 173, (), "",
+        kind="rmvpe", file_name="rmvpe.pt",
+        sha256="RMVPE_SHA256",
+        urls=("https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/main/rmvpe.pt",),
         experimental=True,
     ),
 }
@@ -147,7 +156,7 @@ def search_dirs() -> list[Path]:
 def _installed_in(folder: Path, spec: ModelSpec) -> bool:
     if not folder.is_dir():
         return False
-    if spec.kind == "roformer":
+    if spec.file_name:                       # 파일 하나짜리 모델 (BS-RoFormer, RMVPE)
         f = folder / spec.file_name
         if spec.config_name and not (folder / spec.config_name).is_file():
             return False
@@ -249,7 +258,7 @@ def download_model(name: str, progress: Optional[ProgressCb] = None,
     spec = MODELS[name]
     folder = user_models_dir() / name
     folder.mkdir(parents=True, exist_ok=True)
-    if spec.kind == "roformer":
+    if spec.file_name:
         return _download_single(spec, folder, progress, cancel)
     (folder / f"{name}.yaml").write_text(spec.yaml_text, encoding="utf-8")
 
@@ -350,6 +359,21 @@ def _download_single(spec: ModelSpec, folder: Path, progress: Optional[ProgressC
                      f"{user_models_dir()} 에 복사하면 됩니다.\n\n" + "\n".join(errors))
 
 
+# 예전 버전에서 내려받았지만 더 이상 쓰지 않는 모델 폴더 (사용자 모델 폴더에서만 지움)
+OBSOLETE_DIRS = ("duet_male_female",)      # v1.3.0~1.3.4 실험실 남/여 분리 모델 (약 503MB)
+
+
+def remove_obsolete() -> list:
+    removed = []
+    for name in OBSOLETE_DIRS:
+        d = user_models_dir() / name
+        if d.is_dir():
+            shutil.rmtree(d, ignore_errors=True)
+            removed.append(name)
+            log.info("removed obsolete model folder %s", d)
+    return removed
+
+
 def remove_partial_downloads() -> None:
     for p in user_models_dir().rglob("*.part"):
         p.unlink(missing_ok=True)
@@ -377,14 +401,24 @@ def load_model(name: str):
             model.eval()
             _model_cache[name] = model
             return model
-        if name == "duet_unittest":  # 테스트용 초소형 남/여 분리 RoFormer (2-stem, 구조만 동일)
+        if name == "karaoke_unittest":  # 테스트용 초소형 메인/화음 분리 RoFormer (1-stem, 구조만 동일)
             import torch
 
             from .roformer import SW_CONFIG, BSRoformer
 
             torch.manual_seed(0)
-            model = BSRoformer(**dict(SW_CONFIG, dim=16, depth=1, dim_head=8, heads=2, num_stems=2))
-            model.instruments, model.chunk, model.num_overlap = ("male", "female"), 44100 * 2, 2
+            model = BSRoformer(**dict(SW_CONFIG, dim=16, depth=1, dim_head=8, heads=2, num_stems=1))
+            model.instruments, model.chunk, model.num_overlap = ("vocals",), 44100 * 2, 2
+            model.eval()
+            _model_cache[name] = model
+            return model
+        if name == "rmvpe_unittest":  # 테스트용 초소형 무작위 RMVPE (입출력 형태만 동일)
+            import torch
+
+            from .rmvpe import E2E
+
+            torch.manual_seed(0)
+            model = E2E(1, 1, (2, 2), inter_layers=1, en_out_channels=4)
             model.eval()
             _model_cache[name] = model
             return model
@@ -404,6 +438,17 @@ def load_model(name: str):
         if folder is None:
             raise ModelError(f"모델 '{name}' 이(가) 설치되어 있지 않습니다.")
         spec = MODELS[name]
+        if spec.kind == "rmvpe":
+            from . import rmvpe
+
+            try:
+                model = rmvpe.load(folder / spec.file_name)
+            except Exception as exc:
+                raise ModelError(
+                    f"음정 추적 AI 모델 파일을 읽을 수 없습니다 (손상되었을 수 있음): {spec.file_name}\n"
+                    f"해당 파일을 삭제하고 다시 시도하면 새로 다운로드합니다.\n({exc})") from exc
+            _model_cache[name] = model
+            return model
         if spec.kind == "roformer":
             from .roformer import SW_INSTRUMENTS, load_checkpoint, load_sw, read_config
 
@@ -465,7 +510,7 @@ def copy_into_user_dir(src_root: Path) -> list[str]:
     imported = []
     src_root = Path(src_root)
     for spec in MODELS.values():   # 체크포인트 파일만 있는 경우 (예: BS-Roformer-SW.ckpt)
-        if spec.kind == "roformer" and (src_root / spec.file_name).is_file():
+        if spec.file_name and (src_root / spec.file_name).is_file():
             dst = user_models_dir() / spec.name
             dst.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_root / spec.file_name, dst / spec.file_name)

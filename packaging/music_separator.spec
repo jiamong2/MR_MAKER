@@ -64,7 +64,8 @@ hiddenimports += ["safetensors", "safetensors.torch", "yaml", "lameenc", "imagei
                   "sounddevice", "psutil", "certifi", "truststore", "music_separator.smoke",
                   "music_separator.selftest", "music_separator.roformer", "music_separator.pitch",
                   "music_separator.export", "music_separator.pipeline", "music_separator.youtube",
-                  "music_separator.ui.home", "python_stretch", "python_stretch.Signalsmith", "julius",
+                  "music_separator.ui.home", "music_separator.harmony", "music_separator.rmvpe",
+                  "music_separator.transcribe", "python_stretch", "python_stretch.Signalsmith", "julius",
                   "soxr", "yt_dlp"]
 hiddenimports += collect_submodules("yt_dlp_ejs")
 

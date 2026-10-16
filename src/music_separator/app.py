@@ -105,6 +105,12 @@ def main(argv=None) -> int:
     theme.finalize_stylesheet(app)
 
     paths.cleanup_stale_sessions()
+    try:
+        from . import models
+
+        models.remove_obsolete()          # 예전 실험 기능 모델 (남/여 분리, 약 503MB)
+    except Exception:  # noqa: BLE001
+        log.debug("obsolete model cleanup skipped", exc_info=True)
     win = MainWindow(QSettings())
     app.window = win
     win.show()

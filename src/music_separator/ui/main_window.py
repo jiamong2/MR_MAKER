@@ -26,7 +26,7 @@ from .widgets import (COLUMN_GAP, HEADER_WIDTH, ROW_SPACING, ChipButton, DropZon
                       PathMenu, PlayButton, TimeRuler, TrackRow, TracksPanel, Viewport, glow, icon_button, label, repolish,
                       text_button)
 from ..export import ExportJob, ExportOptions, ExportSource
-from .workers import (DuetThread, ExportThread, KeyThread, LoadedAudio, LoadThread, PipelineThread, SeparationThread,
+from .workers import (ExportThread, HarmonyThread, KeyThread, LoadedAudio, LoadThread, PipelineThread, SeparationThread,
                       UpdateCheckThread, UpdateDownloadThread, YouTubeLoadThread,
                       YouTubeUpdateThread)
 
@@ -185,7 +185,7 @@ class MainWindow(QMainWindow):
         self.last_error: Optional[str] = None
         self._seeking = False
         self.pipeline_thread: Optional[PipelineThread] = None
-        self.duet_thread: Optional[DuetThread] = None
+        self.harmony_thread: Optional[HarmonyThread] = None
         self.preview_mixer: Optional[Mixer] = None      # 홈 완료 화면 미리 듣기 (저장한 파일)
         self.preview_player: Optional[Player] = None
         self._preview_path: Optional[Path] = None
@@ -701,7 +701,7 @@ class MainWindow(QMainWindow):
             ("YouTube 기능 업데이트", self.update_youtube, None),
             ("새 버전 확인", lambda: self.check_for_update(manual=True), None),
             None,
-            ("실험실: 듀엣 분리 (남/여)…", self.start_duet_job, None),
+            ("실험실: 화음 따기 (메인 · 화음 분리 + MIDI)…", self.start_harmony_job, None),
             ("로그 폴더 열기", lambda: paths.open_in_file_manager(paths.logs_dir()), None),
             None,
             (f"{APP_NAME} 정보", self.show_about, None),
@@ -813,7 +813,7 @@ class MainWindow(QMainWindow):
     def busy(self) -> bool:
         # 스레드 참조는 finished 처리(완료 시그널 처리 이후)에서 해제되므로 참조 존재 여부로 판단
         return any(t is not None for t in (self.load_thread, self.sep_thread, self.export_thread,
-                                            self.pipeline_thread, self.yt_thread, self.duet_thread))
+                                            self.pipeline_thread, self.yt_thread, self.harmony_thread))
 
     def _thread_finished(self, attr: str):
         t = getattr(self, attr)
@@ -1979,17 +1979,18 @@ class MainWindow(QMainWindow):
             except Exception:  # noqa: BLE001
                 pass
 
-    # ===================================================== [실험] 듀엣 ===
-    def start_duet_job(self):
+    # ================================================ [실험] 화음 따기 ===
+    def start_harmony_job(self):
+        title = "실험실: 화음 따기"
         if self.busy():
-            QMessageBox.information(self, "듀엣 분리", "진행 중인 작업이 끝난 뒤 다시 시도해 주세요.")
+            QMessageBox.information(self, title, "진행 중인 작업이 끝난 뒤 다시 시도해 주세요.")
             return
         h = self.home
         kind = h.source_kind()
         source = h.source_text() if kind in ("file", "youtube") else ""
         if not source:
             start = self.settings.value("last_dir", str(Path.home() / "Music"))
-            path, _ = QFileDialog.getOpenFileName(self, "듀엣 곡 선택", start,
+            path, _ = QFileDialog.getOpenFileName(self, "화음을 딸 곡 선택", start,
                                                   "오디오 (*.mp3 *.wav *.flac *.m4a *.aac *.ogg *.opus *.aiff *.mp4 *.mov);;"
                                                   "모든 파일 (*)")
             if not path:
@@ -1997,20 +1998,21 @@ class MainWindow(QMainWindow):
             source, kind = path, "file"
         if kind == "youtube" and not self._youtube_consent():
             return
-        from .. import duet
+        from .. import harmony
 
         name = Path(source).name if kind == "file" else source
-        need_dl = not models.is_installed(duet.MODEL_NAME)
+        need_mb = harmony.missing_mb()
         box = QMessageBox(self)
-        box.setWindowTitle("실험실: 듀엣 분리 (남/여)")
+        box.setWindowTitle(title)
         box.setIcon(QMessageBox.Icon.Information)
-        box.setText("듀엣 곡의 보컬을 남자 보컬 / 여자 보컬로 나눠 봅니다 (실험 기능)")
+        box.setText("보컬을 메인 보컬과 화음(백보컬)으로 나누고, 각각을 음표(MIDI)로 받아 적습니다 (실험 기능)")
         box.setInformativeText(
             f"대상: {name}\n\n"
-            "• 저장되는 파일: 반주(MR), 남자 보컬, 여자 보컬\n"
-            "• 남녀가 함께 부르는 구간에 맞춘 모델이라, 번갈아 부르는 곡이나 같은 성별 듀엣은 잘 나뉘지 않을 수 있습니다.\n"
-            + ("• 처음 한 번 남/여 분리 AI 모델(약 503MB)을 내려받습니다.\n" if need_dl else "")
-            + ("• 그래픽카드 가속 없이 처리하면 곡 길이의 10배 이상 걸릴 수 있습니다.\n"
+            "• 저장되는 파일: 반주(MR), 메인 보컬, 화음 (오디오) + 메인 보컬, 화음 (MIDI)\n"
+            "• MIDI 는 한 트랙에 한 음씩 받아 적습니다. 화음이 여러 겹이면 가장 큰 소리를 따라갑니다.\n"
+            "• MIDI 는 120 BPM 기준으로 원곡과 시간이 맞춰져 있습니다 (프로젝트 템포 120, 1마디에 놓기).\n"
+            + (f"• 처음 한 번 AI 모델 2개(약 {need_mb}MB)를 내려받습니다.\n" if need_mb else "")
+            + ("• 그래픽카드 가속 없이 처리하면 곡 길이의 몇 배가 걸릴 수 있습니다.\n"
                if self._resolve_device() == "cpu" else "")
             + "\n시작할까요?")
         ok = box.addButton("시작", QMessageBox.ButtonRole.AcceptRole)
@@ -2026,13 +2028,13 @@ class MainWindow(QMainWindow):
             model_override=os.environ.get("MUSIC_SEPARATOR_FORCE_MODEL") or None)
         prev = self.last_prep if self.last_prep is not None and pipeline.source_id_for(source) == \
             self.last_prep.source_id else None
-        t = DuetThread(spec, self.session_dir / "jobs", prev, self.last_sep if prev else None,
-                       self.last_sep_key if prev else None, self)
-        self.duet_thread = t
+        t = HarmonyThread(spec, self.session_dir / "jobs", prev, self.last_sep if prev else None,
+                          self.last_sep_key if prev else None, self)
+        self.harmony_thread = t
         from PySide6.QtWidgets import QProgressDialog
 
         dlg = QProgressDialog("준비 중…", "취소", 0, 1000, self)
-        dlg.setWindowTitle("듀엣 분리 (실험)")
+        dlg.setWindowTitle("화음 따기 (실험)")
         dlg.setMinimumWidth(460)
         dlg.setMinimumDuration(0)
         dlg.setAutoClose(False)
@@ -2049,29 +2051,32 @@ class MainWindow(QMainWindow):
             dlg.setValue(int(f * 1000))
             dlg.setLabelText(m + tail)
         t.progress.connect(on_progress)
-        t.done.connect(lambda res: (dlg.close(), self._on_duet_done(res)))
+        t.done.connect(lambda res: (dlg.close(), self._on_harmony_done(res)))
         t.failed.connect(lambda err: (dlg.close(), self._notify_done(failed=True),
-                                      self._error(f"듀엣 분리에 실패했습니다.\n{err}")))
-        t.cancelled.connect(lambda: (dlg.close(), self.set_status("듀엣 분리를 취소했습니다.")))
-        t.finished.connect(lambda: (setattr(self, "duet_thread", None), t.deleteLater(), self._set_state()))
+                                      self._error(f"화음 따기에 실패했습니다.\n{err}")))
+        t.cancelled.connect(lambda: (dlg.close(), self.set_status("화음 따기를 취소했습니다.")))
+        t.finished.connect(lambda: (setattr(self, "harmony_thread", None), t.deleteLater(), self._set_state()))
         dlg.show()
         t.start()
         self._set_state()
-        self.set_status("듀엣 분리 중 (실험)…", "busy")
+        self.set_status("화음 따는 중 (실험)…", "busy")
 
-    def _on_duet_done(self, res):
+    def _on_harmony_done(self, res):
         self.last_prep, self.last_sep, self.last_sep_key = res.prepared, res.separation, res.separation_key
         self._notify_done()
-        self.set_status(f"듀엣 분리 완료 → {Path(res.files[0]).parent}")
+        self.set_status(f"화음 따기 완료 → {Path(res.files[0]).parent}")
         if os.environ.get("MUSIC_SEPARATOR_NONINTERACTIVE"):
             return
         box = QMessageBox(self)
-        box.setWindowTitle("듀엣 분리 완료 (실험)")
+        box.setWindowTitle("화음 따기 완료 (실험)")
         box.setIcon(QMessageBox.Icon.Information)
         box.setText("파일을 저장했습니다")
+        counts = f"MIDI 음표: 메인 보컬 {res.counts.get('lead', 0)}개 · 화음 {res.counts.get('back', 0)}개"
         box.setInformativeText("\n".join(Path(f).name for f in res.files)
-                               + f"\n\n걸린 시간: {audio_io.format_time(res.seconds)}"
-                               + ("\n" + "\n".join(res.notes) if res.notes else ""))
+                               + f"\n\n{counts}\n걸린 시간: {audio_io.format_time(res.seconds)}"
+                               + ("\n" + "\n".join(res.notes) if res.notes else "")
+                               + "\n\nMIDI 는 120 BPM 기준입니다. DAW 프로젝트 템포를 120 으로 두고 오디오와 함께 "
+                                 "1마디에 놓으면 시간이 맞습니다.")
         open_btn = box.addButton("폴더 열기", QMessageBox.ButtonRole.AcceptRole)
         box.addButton("닫기", QMessageBox.ButtonRole.RejectRole)
         box.exec()
@@ -2264,9 +2269,9 @@ class MainWindow(QMainWindow):
             self.key_thread.wait(30000)
         if self.update_dl_thread is not None:
             self.update_dl_thread.cancel.set()
-        if self.duet_thread is not None:
-            self.duet_thread.cancel()
-            self.duet_thread.wait(30000)
+        if self.harmony_thread is not None:
+            self.harmony_thread.cancel()
+            self.harmony_thread.wait(30000)
         for t in (self.update_check_thread, self.update_dl_thread):
             if t is not None and t.isRunning():
                 t.wait(10000)

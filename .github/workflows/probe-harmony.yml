@@ -1,0 +1,26 @@
+# 화음 따기(메인/화음 분리 + 음정 추적) 모델 점검 (실험 기능 개발용)
+name: Probe harmony models
+
+on:
+  push:
+    branches: [main]
+    paths: ["scripts/probe_harmony.py", ".github/workflows/probe-harmony.yml", "src/music_separator/rmvpe.py",
+            "src/music_separator/transcribe.py"]
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install numpy einops pyyaml soundfile soxr beartype rotary-embedding-torch packaging librosa
+          git clone --depth 1 https://github.com/ZFTurbo/Music-Source-Separation-Training "$RUNNER_TEMP/mss"
+          git clone --depth 1 https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI "$RUNNER_TEMP/rvc"
+      - name: Probe
+        run: python scripts/probe_harmony.py "$RUNNER_TEMP/probe" "$RUNNER_TEMP/mss" "$RUNNER_TEMP/rvc"

@@ -192,7 +192,7 @@ class Exporter:
 
     # --------------------------------------------------------------- 계산 ---
     def formant_for(self, job: ExportJob) -> bool:
-        return bool(self.opts.formant_vocals and job.kind == "stem" and job.key == "vocals")
+        return bool(self.opts.formant_vocals and job.kind == "stem" and job.key.startswith("vocals"))
 
     def compute(self, job: ExportJob, rate: int) -> np.ndarray:
         semis = self.opts.semitones

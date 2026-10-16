@@ -364,11 +364,11 @@ class UpdateDownloadThread(QThread):
             self.failed.emit(f"업데이트 파일을 받지 못했습니다. 인터넷 연결을 확인해 주세요.\n({exc})")
 
 
-class DuetThread(QThread):
-    """[실험] 듀엣 남/여 보컬 분리."""
+class HarmonyThread(QThread):
+    """[실험] 화음 따기: 메인 보컬 / 화음 분리 + MIDI."""
 
     progress = Signal(float, str)
-    done = Signal(object)                   # duet.DuetResult
+    done = Signal(object)                   # harmony.HarmonyResult
     failed = Signal(object)                 # pipeline.PipelineError
     cancelled = Signal()
 
@@ -384,17 +384,17 @@ class DuetThread(QThread):
         self.cancel_event.set()
 
     def run(self):
-        from .. import duet
+        from .. import harmony
 
         try:
-            res = duet.run(self.spec, self.work_dir, lambda f, m: self.progress.emit(f, m), self.cancel_event,
-                           *self.prev)
+            res = harmony.run(self.spec, self.work_dir, lambda f, m: self.progress.emit(f, m), self.cancel_event,
+                              *self.prev)
             self.done.emit(res)
         except pipeline.PipelineCancelled:
             self.cancelled.emit()
         except pipeline.PipelineError as exc:
-            log.warning("duet failed at %s: %s", exc.stage, exc)
+            log.warning("harmony failed at %s: %s", exc.stage, exc)
             self.failed.emit(exc)
         except BaseException as exc:  # noqa: BLE001
-            log.error("duet crashed: %s\n%s", exc, traceback.format_exc())
+            log.error("harmony crashed: %s\n%s", exc, traceback.format_exc())
             self.failed.emit(pipeline.PipelineError(engine.friendly_error(exc, "처리"), "", "unknown", True))
