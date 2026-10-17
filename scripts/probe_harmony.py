@@ -290,8 +290,10 @@ def evaluate(fn, ex):
     alt_m = np.concatenate([gm_a[:h], z[: len(raw) - h], gm_a])
     alt_f = np.concatenate([z, gf_a[h:], gf_a])
     alt_mix = np.concatenate([gm_a[:h], gf_a[h:], raw])
+    quiet_f = gf_a * 0.4                                     # 화음이 8dB 작은 '메인 + 백보컬' 형태
     songs = {"duet": (raw, gm_a, gf_a), "alternating": (alt_mix, alt_m, alt_f),
-             "alternating+reverb": (reverb(alt_mix), alt_m, alt_f)}
+             "alternating+reverb": (reverb(alt_mix), alt_m, alt_f),
+             "backing -8dB": (gm_a + quiet_f, gm_a, quiet_f)}
 
     def gt(x, n):
         f0, _ = fn(audio_io.resample(x.mean(1, keepdims=True), sr, 16000)[:, 0])
@@ -321,20 +323,18 @@ def evaluate(fn, ex):
         # 조건별 영향 (기본값 대비) + 조합 격자
         rows = []
         for label, over in (("no harm gate", {"HARM_REL_DB": 200.0}), ("no min", {"HARM_MIN": 0.0}),
-                            ("no echo rule", {"ECHO_START": 0.0}), ("no melody keep", {"keep": False})):
+                            ("no melody keep", {"keep": False})):
             r = metrics(*new_method(c, **over), gm, gf)
             rows.append(f"{label}: " + " ".join(f"{k.split('_', 1)[1]}={v * 100:.0f}" for k, v in r.items()
                                                if k in ("solo_false_line2", "duet_both", "line2_precision")))
-        note(f"[{name}] ablation (default {harmony.HARM_REL_DB:g}dB/{harmony.HARM_MIN:g}s/echo/keep): " + " | ".join(rows))
+        note(f"[{name}] ablation (default {harmony.HARM_REL_DB:g}dB/{harmony.HARM_MIN:g}s/keep): " + " | ".join(rows))
         grid = []
-        for rel in (12.0, 15.0, 18.0, 25.0):
+        for rel in (9.0, 12.0, 15.0):
             for mn in (0.1, 0.15, 0.25):
-                for es in (0.0, 0.12):
-                    r = metrics(*new_method(c, HARM_REL_DB=rel, HARM_MIN=mn, ECHO_START=es), gm, gf)
-                    grid.append(f"{rel:g}/{mn:g}/{'E' if es else '-'}:"
-                                f"{r.get('solo_false_line2', 0) * 100:.0f},{r.get('duet_both', 0) * 100:.0f},"
-                                f"{r.get('line2_precision', 0) * 100:.0f}")
-        note(f"[{name}] grid rel/min/echo: false,both,prec  " + " ".join(grid))
+                r = metrics(*new_method(c, HARM_REL_DB=rel, HARM_MIN=mn), gm, gf)
+                grid.append(f"{rel:g}/{mn:g}:{r.get('solo_false_line2', 0) * 100:.0f},"
+                            f"{r.get('duet_both', 0) * 100:.0f},{r.get('line2_precision', 0) * 100:.0f}")
+        note(f"[{name}] grid rel/min: false,both,prec  " + " ".join(grid))
         # 확인용 오디오
         a_mel, a_har = harmony.split_audio(mix, harmony.midi_to_hz(mel), harmony.midi_to_hz(har), sr)
         dv = transcribe.frame_db(mix, sr, n)

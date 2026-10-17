@@ -5,8 +5,7 @@
 3) 그 목소리의 배음 자리를 지운 나머지 소리에서 두 번째 목소리의 음정 추적 → 화음 후보
 4) 화음은 진짜로 같이 부르는 소리만 남김
    - 나머지 소리 안에서 그 음의 배음 에너지가 보컬 전체에 비해 충분하고 (숨소리·자음·반주 잔향 제외)
-   - 0.25초 이상 이어지며
-   - 주 선율이 방금(0.12초 안) 떠난 음과 같은 높이로 시작해 0.6초 안에 끝나는 소리는 앞 음의 잔향으로 봄
+   - 0.15초 이상 이어지며
    - 주 선율과 1반음 안쪽이면 같은 목소리로 봄
 5) 같이 부르는 동안 가장 잘 들리는 목소리가 바뀌어 주 선율이 다른 사람에게 튀면, 이어지던 쪽을 주 선율로 유지
 6) 저장: MR, 주 선율 / 화음 MIDI, 확인용 오디오 2개 (화음 = 같이 부르는 구간의 화음 배음 자리만,
@@ -40,11 +39,11 @@ SR16, HOP16, NFFT16 = 16000, 160, 1024
 CANCEL_REL = 0.03        # 두 번째 목소리를 찾을 때 지우는 배음 폭 (주파수 비율)
 MASK_REL, MASK_MAX = 0.03, 0.4     # 배음 에너지 측정·확인용 오디오 마스크 폭 (비율, f0 대비 상한)
 SAME_VOICE = 1.0         # 반음: 두 번째 음정이 첫 번째와 이만큼 가까우면 같은 목소리로 봄
-HARM_REL_DB = 15.0       # 화음: 그 음의 배음 에너지가 보컬 전체보다 이만큼 이상 작으면 버림
-HARM_MIN = 0.25          # 초: 화음이 이만큼 이어져야 인정
+HARM_REL_DB = 12.0       # 화음: 그 음의 배음 에너지가 보컬 전체보다 이만큼 이상 작으면 버림
+HARM_MIN = 0.15          # 초: 화음이 이만큼 이어져야 인정
+# 두 값은 정답 트랙이 있는 시험곡(듀엣 / 번갈아 / 번갈아 + 잔향)에서 가짜 화음 비율과 화음 검출률을 함께 보고
+# 고름 (scripts/probe_harmony.py 의 grid). '주 선율이 방금 떠난 음의 잔향' 규칙은 진짜 화음을 더 많이 지워서 뺐음
 HARM_GAP = 0.03          # 초: 화음 안의 이 정도 끊김은 이어진 것으로 봄
-ECHO_START = 0.12        # 초: 주 선율이 그 음을 떠난 지 이 시간 안에 같은 높이로 시작하고
-ECHO_MAX = 0.6           # 초: 이보다 짧게 끝나는 화음 후보는 앞 음의 잔향으로 봄
 ABS_GATE_DB = -55.0      # 이보다 작은 소리는 무음으로 봄
 QUIET_DB = 40.0          # 주 선율: 곡의 큰 보컬(상위 5%)보다 이만큼 이상 작으면 무시 (반주 잔향 등)
 
@@ -223,7 +222,6 @@ def validate_harmony(ma: np.ndarray, mb: np.ndarray, harm_db: np.ndarray, total_
             runs.append([(a, b)])
     out = np.full(n, np.nan)
     min_len = int(round(HARM_MIN * fps))
-    echo_start, echo_max = int(round(ECHO_START * fps)), int(round(ECHO_MAX * fps))
     for parts in runs:
         s, e = parts[0][0], parts[-1][1]
         # 구간 안에서도 높이가 크게 튀면 나눔
@@ -236,13 +234,6 @@ def validate_harmony(ma: np.ndarray, mb: np.ndarray, harm_db: np.ndarray, total_
         for a, b in pieces:
             if np.sum(np.isfinite(mb[a:b])) < min_len:
                 continue
-            if echo_start > 0 and b - a < echo_max:
-                head = mb[a:a + 5]
-                p0 = float(np.nanmedian(head)) if np.isfinite(head).any() else np.nan
-                near = np.nonzero(np.abs(ma[max(0, a - echo_start):a + 1] - p0) <= 0.5)[0]
-                now = ma[a + 1:a + 6]
-                if np.isfinite(p0) and len(near) and not np.any(np.abs(now - p0) <= 0.5):
-                    continue                               # 주 선율이 방금 떠난 음의 잔향
             out[a:b] = mb[a:b]
     return out
 

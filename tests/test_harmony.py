@@ -249,7 +249,7 @@ def test_numpy_stft_matches_identity_and_masks():
 
 
 def test_validate_harmony_rules():
-    """화음 인정 조건: 배음 에너지, 0.25초 이상, 주 선율 잔향 아님, 같은 음 아님."""
+    """화음 인정 조건: 배음 에너지, 0.15초 이상, 같은 음 아님."""
     from music_separator import harmony
 
     n = 300
@@ -259,19 +259,14 @@ def test_validate_harmony_rules():
     harm = np.full(n, -25.0)                       # 보컬 전체보다 5dB 작음 → 충분
     mb = np.full(n, nan)
     mb[10:60] = 64.0                               # 0.5초 화음 → 인정
-    mb[80:95] = 67.0                               # 0.15초 → 너무 짧음
+    mb[80:90] = 67.0                               # 0.1초 → 너무 짧음
     mb[120:170] = 60.4                             # 주 선율과 같은 음
     mb[200:260] = 55.0
-    harm[200:260] = -45.0                          # 배음 에너지가 25dB 작음 → 숨소리·잔향
+    harm[200:260] = -35.0                          # 배음 에너지가 15dB 작음 → 숨소리·잔향
     out = harmony.validate_harmony(ma, mb, harm, total)
     assert np.all(out[10:60] == 64.0)
-    assert np.all(np.isnan(out[80:95])) and np.all(np.isnan(out[120:170])) and np.all(np.isnan(out[200:260]))
-    # 잔향: 주 선율이 0.3초 전까지 E4(64) 를 부르다 G4(67) 로 옮긴 직후 E4 가 남아 있는 경우
+    assert np.all(np.isnan(out[80:90])) and np.all(np.isnan(out[120:170])) and np.all(np.isnan(out[200:260]))
     ma2 = np.concatenate([np.full(100, 64.0), np.full(100, 67.0)])
-    mb2 = np.full(200, nan)
-    mb2[100:140] = 64.0
-    out2 = harmony.validate_harmony(ma2, mb2, np.full(200, -25.0), np.full(200, -20.0))
-    assert np.all(np.isnan(out2))
     # 진짜 화음은 주 선율이 움직여도 처음부터 함께 있었으면 유지
     mb3 = np.full(200, nan)
     mb3[0:200] = 60.0
