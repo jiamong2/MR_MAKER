@@ -318,19 +318,23 @@ def evaluate(fn, ex):
             note(f"[{name}] solo notes: ref {len(ref)} | OLD line1 {len(o1)} F={note_f(o1, ref):.2f} | "
                  f"NEW melody {len(n1)} F={note_f(n1, ref):.2f} | semitone steps ref {semis(ref) * 100:.0f}% "
                  f"OLD {semis(o1) * 100:.0f}% NEW {semis(n1) * 100:.0f}%")
-        # 조건별 영향
-        if name != "duet" or True:
-            rows = []
-            for label, over in (("harm>=-10dB", {"HARM_REL_DB": 10.0}), ("harm>=-12dB", {"HARM_REL_DB": 12.0}),
-                                ("harm>=-18dB", {"HARM_REL_DB": 18.0}), ("harm>=-25dB", {"HARM_REL_DB": 25.0}),
-                                ("no harm gate", {"HARM_REL_DB": 200.0}), ("min 0.15s", {"HARM_MIN": 0.15}),
-                                ("min 0.4s", {"HARM_MIN": 0.4}), ("no min", {"HARM_MIN": 0.0}),
-                                ("no echo rule", {"ECHO_WINDOW": 0.0}), ("no melody keep", {"keep": False})):
-                m2, h2 = new_method(c, **over)
-                r = metrics(m2, h2, gm, gf)
-                rows.append(f"{label}: " + " ".join(f"{k.split('_', 1)[1]}={v * 100:.0f}" for k, v in r.items()
-                                                   if k in ("solo_false_line2", "duet_both", "line2_precision")))
-            note(f"[{name}] ablation (default -15dB/0.25s/echo/keep): " + " | ".join(rows))
+        # 조건별 영향 (기본값 대비) + 조합 격자
+        rows = []
+        for label, over in (("no harm gate", {"HARM_REL_DB": 200.0}), ("no min", {"HARM_MIN": 0.0}),
+                            ("no echo rule", {"ECHO_START": 0.0}), ("no melody keep", {"keep": False})):
+            r = metrics(*new_method(c, **over), gm, gf)
+            rows.append(f"{label}: " + " ".join(f"{k.split('_', 1)[1]}={v * 100:.0f}" for k, v in r.items()
+                                               if k in ("solo_false_line2", "duet_both", "line2_precision")))
+        note(f"[{name}] ablation (default {harmony.HARM_REL_DB:g}dB/{harmony.HARM_MIN:g}s/echo/keep): " + " | ".join(rows))
+        grid = []
+        for rel in (12.0, 15.0, 18.0, 25.0):
+            for mn in (0.1, 0.15, 0.25):
+                for es in (0.0, 0.12):
+                    r = metrics(*new_method(c, HARM_REL_DB=rel, HARM_MIN=mn, ECHO_START=es), gm, gf)
+                    grid.append(f"{rel:g}/{mn:g}/{'E' if es else '-'}:"
+                                f"{r.get('solo_false_line2', 0) * 100:.0f},{r.get('duet_both', 0) * 100:.0f},"
+                                f"{r.get('line2_precision', 0) * 100:.0f}")
+        note(f"[{name}] grid rel/min/echo: false,both,prec  " + " ".join(grid))
         # 확인용 오디오
         a_mel, a_har = harmony.split_audio(mix, harmony.midi_to_hz(mel), harmony.midi_to_hz(har), sr)
         dv = transcribe.frame_db(mix, sr, n)
