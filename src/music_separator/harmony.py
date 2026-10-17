@@ -5,10 +5,10 @@
 3) 그 목소리의 배음 자리를 지운 나머지 소리에서 두 번째 목소리의 음정 추적 → 화음 후보
 4) 화음은 진짜로 같이 부르는 소리만 남김
    - 나머지 소리 안에서 그 음의 배음 에너지가 보컬 전체에 비해 충분하고 (숨소리·자음·반주 잔향 제외;
-     12dB 기준을 넘는 부분이 있어야 하고, 그 앞뒤는 18dB 기준까지 이어 붙임)
+     12dB 기준을 넘는 부분이 있어야 하고, 그 앞뒤는 15dB 기준까지 이어 붙임)
    - 0.15초 이상 이어지며
    - 주 선율과 1반음 안쪽이면 같은 목소리로 봄
-   - 주 선율 후보가 없는 곳에서만 잡힌 소리는 화음이 아니라 혼자 나는 목소리 → 주 선율로
+   - 주 선율이 함께 날 때만 (주 선율이 없는 곳에서 잡힌 소리는 주 선율의 음량 기준을 넘지 못한 작은 소리 — 버림)
 5) 같이 부르는 동안 가장 잘 들리는 목소리가 바뀌어 주 선율이 다른 사람에게 튀면, 이어지던 쪽을 주 선율로 유지
 6) 저장: MR, 주 선율 / 화음 MIDI, 확인용 오디오 2개 (화음 = 같이 부르는 구간의 화음 배음 자리만,
    주 선율 = 보컬 − 화음 → 둘을 더하면 원래 보컬)
@@ -42,7 +42,7 @@ CANCEL_REL = 0.03        # 두 번째 목소리를 찾을 때 지우는 배음 �
 MASK_REL, MASK_MAX = 0.03, 0.4     # 배음 에너지 측정·확인용 오디오 마스크 폭 (비율, f0 대비 상한)
 SAME_VOICE = 1.0         # 반음: 두 번째 음정이 첫 번째와 이만큼 가까우면 같은 목소리로 봄
 HARM_REL_DB = 12.0       # 화음: 그 음의 배음 에너지가 보컬 전체보다 이만큼 이상 작으면 버림
-HARM_WEAK_DB = 18.0      # 화음 구간을 앞뒤로 늘릴 때의 느슨한 기준 (구간 안에 위 기준을 넘는 프레임이 충분해야 함)
+HARM_WEAK_DB = 15.0      # 화음 구간을 앞뒤로 늘릴 때의 느슨한 기준 (구간 안에 위 기준을 넘는 프레임이 충분해야 함)
 HARM_MIN = 0.15          # 초: 화음이 이만큼 이어져야 인정 (위 기준을 넘는 프레임 기준)
 # 두 값은 정답 트랙이 있는 시험곡(듀엣 / 번갈아 / 번갈아 + 잔향)에서 가짜 화음 비율과 화음 검출률을 함께 보고
 # 고름 (scripts/probe_harmony.py 의 grid). '주 선율이 방금 떠난 음의 잔향' 규칙은 진짜 화음을 더 많이 지워서 뺐음
@@ -243,16 +243,6 @@ def validate_harmony(ma: np.ndarray, mb: np.ndarray, harm_db: np.ndarray, total_
     return out
 
 
-def fill_melody(ma: np.ndarray, mb: np.ndarray, harm_db: np.ndarray, total_db: np.ndarray) -> np.ndarray:
-    """주 선율 후보가 없는 프레임에서 두 번째 추적만 소리를 찾았으면 (배음 에너지가 충분할 때) 그것이 혼자 나는
-    목소리 → 주 선율로 옮김. 화음은 주 선율과 함께 날 때만 인정."""
-    n = min(len(ma), len(mb), len(harm_db), len(total_db))
-    out = np.asarray(ma[:n], float).copy()
-    lone = ~np.isfinite(out) & np.isfinite(mb[:n]) & (harm_db[:n] >= total_db[:n] - HARM_REL_DB)
-    out[lone] = mb[:n][lone]
-    return out
-
-
 def keep_melody_line(ma: np.ndarray, mh: np.ndarray) -> tuple:
     """같이 부르는 동안 가장 잘 들리는 목소리가 바뀌어 주 선율 후보가 튀고, 화음이 직전 주 선율을 이어 가면
     둘을 바꿔 주 선율이 한 사람의 선을 따라가게 함. 반환: (주 선율, 화음)."""
@@ -313,9 +303,8 @@ def two_voices(model, vocals: np.ndarray, rate: int, device: str = "cpu",
 
 def pick_lines(c: dict) -> tuple:
     """후보 → (주 선율, 화음)."""
-    ma = fill_melody(c["ma"], c["mb"], c["harm"], c["total"])
-    mh = validate_harmony(ma, c["mb"], c["harm"], c["total"])
-    return keep_melody_line(ma, mh)
+    mh = validate_harmony(c["ma"], c["mb"], c["harm"], c["total"])
+    return keep_melody_line(c["ma"], mh)
 
 
 # ------------------------------------------------------------------ 실행 ---
