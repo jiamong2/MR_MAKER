@@ -471,10 +471,10 @@ class WaveformView(QWidget):
             self._invalidate()
 
     def set_position(self, frac: float):
-        x_old = self.vp.to_x(self._pos, self.width())
-        x_new = self.vp.to_x(frac, self.width())
-        self._pos = frac
-        if abs(x_new - x_old) >= 0.5:
+        # 마지막으로 그린 위치와 비교 (매번 위치를 덮어쓰면 한 번에 0.5px 미만씩 움직이는 긴 곡·좁은 창에서
+        # 세로선이 영영 다시 그려지지 않음)
+        if abs(self.vp.to_x(frac, self.width()) - self.vp.to_x(self._pos, self.width())) >= 0.5:
+            self._pos = frac
             self.update()
 
     def _invalidate(self):

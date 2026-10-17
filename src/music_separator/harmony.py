@@ -1,15 +1,18 @@
-"""[실험] 화음 따기: 보컬에서 두 성부(위 / 아래)를 찾아 음표(MIDI)로 받아 적기.
+"""[실험] 화음 따기: 보컬에서 주 선율과 화음을 찾아 음표(MIDI)로 받아 적기.
 
 1) 기존 파이프라인으로 보컬/반주 분리 (같은 입력이면 이전 결과 재사용)
-2) 보컬 트랙에서 가장 큰 목소리의 음정 추적 (RMVPE)
-3) 그 목소리의 배음 자리를 지운 나머지 소리에서 두 번째 목소리의 음정 추적
-   (첫 번째와 1반음 안쪽이면 같은 목소리가 남은 것으로 보고 버림)
-4) 프레임마다 높은 음 = 위 성부, 낮은 음 = 아래 성부 (한 목소리만 나는 곳은 위 성부)
-5) 저장: MR, 위/아래 성부 확인용 오디오(보컬을 각 성부의 배음 자리로 나눈 것 — 둘을 더하면 원래 보컬),
-   위/아래 성부 MIDI
+2) 보컬 트랙에서 가장 잘 들리는 목소리의 음정 추적 (RMVPE) → 주 선율 후보
+3) 그 목소리의 배음 자리를 지운 나머지 소리에서 두 번째 목소리의 음정 추적 → 화음 후보
+4) 화음은 진짜로 같이 부르는 소리만 남김
+   - 나머지 소리 안에서 그 음의 배음 에너지가 보컬 전체에 비해 충분하고 (숨소리·자음·반주 잔향 제외)
+   - 0.25초 이상 이어지며
+   - 주 선율이 바로 전(0.6초 안)에 부른 음과 같은 높이로 시작하지 않을 것 (앞 음의 잔향 제외)
+   - 주 선율과 1반음 안쪽이면 같은 목소리로 봄
+5) 같이 부르는 동안 가장 잘 들리는 목소리가 바뀌어 주 선율이 다른 사람에게 튀면, 이어지던 쪽을 주 선율로 유지
+6) 저장: MR, 주 선율 / 화음 MIDI, 확인용 오디오 2개 (화음 = 같이 부르는 구간의 화음 배음 자리만,
+   주 선율 = 보컬 − 화음 → 둘을 더하면 원래 보컬)
 
-남/여 합창 예제(정답 트랙 있음)로 잰 결과: 두 성부를 동시에 맞힌 프레임 87%, 찾은 음의 95% 가 정답
-(scripts/probe_harmony.py). 같은 음을 옥타브로 겹쳐 부르면 위쪽 목소리를 찾지 못할 수 있다.
+검증: scripts/probe_harmony.py (정답 트랙이 있는 남/여 예제로 만든 '솔로 → 솔로 → 함께' 듀엣, 잔향 포함).
 """
 from __future__ import annotations
 
@@ -30,20 +33,25 @@ from .export import ExportCancelled, Exporter, ExportJob, ExportOptions, ExportS
 log = logging.getLogger(__name__)
 
 MODEL_NAME = "rmvpe"
-LABELS = {"up": "위 성부", "lo": "아래 성부"}
-TRACK_NAMES = {"up": "Upper voice", "lo": "Lower voice"}     # MIDI 트랙 이름 (DAW 호환을 위해 영문)
-STEM_KEYS = {"up": "vocals_upper", "lo": "vocals_lower"}
+LABELS = {"mel": "주 선율", "har": "화음"}
+TRACK_NAMES = {"mel": "Melody", "har": "Harmony"}       # MIDI 트랙 이름 (DAW 호환을 위해 영문)
+STEM_KEYS = {"mel": "vocals_melody", "har": "vocals_harmony"}
+SR16, HOP16, NFFT16 = 16000, 160, 1024
 CANCEL_REL = 0.03        # 두 번째 목소리를 찾을 때 지우는 배음 폭 (주파수 비율)
-PREVIEW_REL, PREVIEW_MAX = 0.03, 0.4     # 확인용 오디오 마스크 폭 (비율, f0 대비 상한)
+MASK_REL, MASK_MAX = 0.03, 0.4     # 배음 에너지 측정·확인용 오디오 마스크 폭 (비율, f0 대비 상한)
 SAME_VOICE = 1.0         # 반음: 두 번째 음정이 첫 번째와 이만큼 가까우면 같은 목소리로 봄
-REL_GATE_DB = 18.0       # 두 번째 목소리: 보컬 전체보다 이만큼 이상 작으면 무시
+HARM_REL_DB = 15.0       # 화음: 그 음의 배음 에너지가 보컬 전체보다 이만큼 이상 작으면 버림
+HARM_MIN = 0.25          # 초: 화음이 이만큼 이어져야 인정
+HARM_GAP = 0.03          # 초: 화음 안의 이 정도 끊김은 이어진 것으로 봄
+ECHO_WINDOW = 0.6        # 초: 주 선율이 이 시간 안에 부른 음과 같은 높이로 시작하는 화음은 잔향으로 봄
 ABS_GATE_DB = -55.0      # 이보다 작은 소리는 무음으로 봄
-QUIET_DB = 40.0          # 첫 번째 목소리: 곡의 큰 보컬(상위 5%)보다 이만큼 이상 작으면 무시 (반주 잔향 등)
+QUIET_DB = 40.0          # 주 선율: 곡의 큰 보컬(상위 5%)보다 이만큼 이상 작으면 무시 (반주 잔향 등)
 
 # 전체 진행률 배분
-P_SEP, P_DL, P_A, P_CANCEL, P_B, P_SPLIT, P_SAVE = 0.55, 0.60, 0.72, 0.75, 0.87, 0.91, 0.97
+P_SEP, P_DL, P_B, P_SPLIT, P_SAVE = 0.55, 0.60, 0.87, 0.91, 0.97
 
 ProgressCb = Callable[[float, str], None]
+PitchFn = Callable[[np.ndarray], tuple]     # 16kHz 모노 → (f0 Hz, 신뢰도), 10ms 간격
 
 
 class _Cancelled(Exception):
@@ -58,63 +66,66 @@ class HarmonyResult:
     separation_key: tuple
     seconds: float = 0.0
     notes: list = field(default_factory=list)       # 안내 문구
-    counts: dict = field(default_factory=dict)      # {"up": 음표 수, "lo": 음표 수}
-    midi: dict = field(default_factory=dict)        # {"up": 경로, "lo": 경로}
-    together: float = 0.0                           # 노래하는 구간 중 두 목소리가 함께 나는 비율
+    counts: dict = field(default_factory=dict)      # {"mel": 음표 수, "har": 음표 수}
+    midi: dict = field(default_factory=dict)        # {"mel": 경로, "har": 경로}
+    together: float = 0.0                           # 노래하는 구간 중 화음이 같이 나는 비율
 
 
 def missing_mb(model_name: str = MODEL_NAME) -> int:
     return models.missing_download_mb(model_name)
 
 
-# ------------------------------------------------------------ 신호 처리 ---
+# ------------------------------------------------------- STFT (numpy) ---
+# torch.stft / istft(center=True, 반사 패딩, 주기형 Hann 창, 창 제곱합 정규화)와 같은 계산.
+# 프레임 묶음 단위로 처리해 긴 곡도 메모리를 적게 씀.
 
-def cancel_harmonics(a16: np.ndarray, f0: np.ndarray, rel: float = CANCEL_REL) -> np.ndarray:
-    """16kHz 모노에서 f0(10ms 간격)의 배음 자리를 지운 나머지 소리."""
-    import torch
-
-    from . import rmvpe
-
-    x = torch.from_numpy(np.ascontiguousarray(a16, dtype=np.float32))
-    win = torch.hann_window(rmvpe.N_FFT)
-    X = torch.stft(x, rmvpe.N_FFT, rmvpe.HOP, rmvpe.N_FFT, win, center=True, return_complex=True)
-    f = _fit(f0, X.shape[1])
-    mask = 1.0 - transcribe.harmonic_mask(f, np.fft.rfftfreq(rmvpe.N_FFT, 1 / rmvpe.SAMPLE_RATE), rel)
-    y = torch.istft(X * torch.from_numpy(mask), rmvpe.N_FFT, rmvpe.HOP, rmvpe.N_FFT, win, center=True,
-                    length=len(a16))
-    return y.numpy()
+def _window(n_fft: int) -> np.ndarray:
+    return (0.5 - 0.5 * np.cos(2 * np.pi * np.arange(n_fft) / n_fft)).astype(np.float32)
 
 
-def split_audio(vocals: np.ndarray, up_hz: np.ndarray, lo_hz: np.ndarray, rate: int) -> tuple:
-    """보컬 (n, ch) → (위 성부, 아래 성부) 확인용 오디오. 위 + 아래 = 보컬 (샘플 단위로 정확히).
+def n_frames(n: int, hop: int) -> int:
+    return 1 + n // hop
 
-    두 성부가 함께 나는 곳은 각 성부의 배음 자리를 나눠 갖고(겹치는 칸은 비율대로), 배음이 아닌 소리(자음·숨소리)는
-    반씩. 한 성부만 나는 곳은 그 성부가 전부 가짐."""
-    import torch
 
-    n_fft, hop = 2048, rate // transcribe.FPS
-    x = np.asarray(vocals, dtype=np.float32)
-    T = 1 + len(x) // hop
-    up_hz, lo_hz = _fit(up_hz, T), _fit(lo_hz, T)
-    freqs = np.fft.rfftfreq(n_fft, 1 / rate)
-    mu = transcribe.harmonic_mask(up_hz, freqs, PREVIEW_REL, PREVIEW_MAX)
-    ml = transcribe.harmonic_mask(lo_hz, freqs, PREVIEW_REL, PREVIEW_MAX)
-    s = mu + ml
-    scale = np.where(s > 1, 1.0 / np.maximum(s, 1e-9), 1.0).astype(np.float32)
-    mu *= scale
-    ml *= scale
-    vu, vl = up_hz > 0, lo_hz > 0
-    w = np.where(vu & ~vl, 1.0, np.where(vl & ~vu, 0.0, 0.5)).astype(np.float32)
-    m_up = mu + (1.0 - mu - ml) * w[None, :]
-    del mu, ml, s, scale
-    M = torch.from_numpy(m_up)
-    win = torch.hann_window(n_fft)
-    up = np.empty_like(x)
-    for ch in range(x.shape[1]):
-        xc = torch.from_numpy(np.ascontiguousarray(x[:, ch]))
-        X = torch.stft(xc, n_fft, hop, n_fft, win, center=True, return_complex=True)
-        up[:, ch] = torch.istft(X * M[:, :X.shape[1]], n_fft, hop, n_fft, win, center=True, length=len(xc)).numpy()
-    return up, x - up
+def _frames(x: np.ndarray, n_fft: int, hop: int):
+    """(패딩한 신호, 프레임 수). 프레임 t 는 원래 신호의 t·hop 을 중심으로 함."""
+    pad = n_fft // 2
+    xp = np.pad(np.asarray(x, dtype=np.float32), (pad, pad), mode="reflect" if len(x) > pad else "constant")
+    return xp, n_frames(len(x), hop)
+
+
+def stft_power(x: np.ndarray, n_fft: int, hop: int, block: int = 2048):
+    """프레임 묶음마다 (시작 프레임, |X|² (주파수, 프레임)) 를 냄."""
+    xp, T = _frames(x, n_fft, hop)
+    win = _window(n_fft)
+    for t0 in range(0, T, block):
+        t1 = min(T, t0 + block)
+        idx = (np.arange(t0, t1) * hop)[:, None] + np.arange(n_fft)[None, :]
+        X = np.fft.rfft(xp[idx] * win, axis=1)
+        yield t0, (X.real ** 2 + X.imag ** 2).T.astype(np.float32)
+
+
+def masked_resynth(x: np.ndarray, n_fft: int, hop: int, mask_fn: Callable[[int, int], np.ndarray],
+                   block: int = 2048) -> np.ndarray:
+    """x 의 STFT 에 mask_fn(t0, t1) → (주파수, t1 − t0) 마스크를 곱해 다시 합성 (길이는 x 와 같음)."""
+    xp, T = _frames(x, n_fft, hop)
+    win = _window(n_fft)
+    out = np.zeros(len(xp), np.float64)
+    norm = np.zeros(len(xp), np.float64)
+    w2 = (win.astype(np.float64)) ** 2
+    for t0 in range(0, T, block):
+        t1 = min(T, t0 + block)
+        starts = np.arange(t0, t1) * hop
+        idx = starts[:, None] + np.arange(n_fft)[None, :]
+        X = np.fft.rfft(xp[idx] * win, axis=1) * mask_fn(t0, t1).T
+        y = np.fft.irfft(X, n=n_fft, axis=1) * win
+        for i, s in enumerate(starts):
+            out[s:s + n_fft] += y[i]
+            norm[s:s + n_fft] += w2
+    pad = n_fft // 2
+    out = out[pad:pad + len(x)]
+    norm = norm[pad:pad + len(x)]
+    return (out / np.where(norm > 1e-11, norm, 1.0)).astype(np.float32)
 
 
 def _fit(a: np.ndarray, n: int) -> np.ndarray:
@@ -127,35 +138,171 @@ def midi_to_hz(m: np.ndarray) -> np.ndarray:
     return np.where(np.isfinite(m), 440.0 * 2.0 ** ((np.nan_to_num(m) - 69.0) / 12.0), 0.0)
 
 
-def two_voices(model, vocals: np.ndarray, rate: int, device: str = "cpu",
-               progress: Optional[Callable[[float, str], None]] = None,
-               cancel: Optional[threading.Event] = None) -> tuple:
-    """보컬 (n, ch) → (첫 번째 목소리, 두 번째 목소리) 음정 (MIDI 실수, NaN = 없음, 10ms 간격)."""
+# ------------------------------------------------------------ 신호 처리 ---
+
+def cancel_harmonics(a16: np.ndarray, f0: np.ndarray, rel: float = CANCEL_REL) -> np.ndarray:
+    """16kHz 모노에서 f0(10ms 간격)의 배음 자리를 지운 나머지 소리."""
+    freqs = np.fft.rfftfreq(NFFT16, 1 / SR16)
+    f = _fit(f0, n_frames(len(a16), HOP16))
+    return masked_resynth(a16, NFFT16, HOP16, lambda t0, t1: 1.0 - transcribe.harmonic_mask(f[t0:t1], freqs, rel))
+
+
+def harmonic_energy_db(x16: np.ndarray, f0: np.ndarray, rel: float = MASK_REL,
+                       max_frac: float = MASK_MAX) -> np.ndarray:
+    """프레임마다 f0 의 배음 자리에 있는 에너지 (dB, 10ms 간격). f0 ≤ 0 이면 -120."""
+    freqs = np.fft.rfftfreq(NFFT16, 1 / SR16)
+    T = n_frames(len(x16), HOP16)
+    f = _fit(f0, T)
+    out = np.full(T, -120.0)
+    for t0, P in stft_power(x16, NFFT16, HOP16):
+        t1 = t0 + P.shape[1]
+        e = (P * transcribe.harmonic_mask(f[t0:t1], freqs, rel, max_frac)).sum(axis=0)
+        out[t0:t1] = 10 * np.log10(np.maximum(e, 1e-12))
+    out[f <= 0] = -120.0
+    return out
+
+
+def total_energy_db(x16: np.ndarray) -> np.ndarray:
+    T = n_frames(len(x16), HOP16)
+    out = np.full(T, -120.0)
+    for t0, P in stft_power(x16, NFFT16, HOP16):
+        out[t0:t0 + P.shape[1]] = 10 * np.log10(np.maximum(P.sum(axis=0), 1e-12))
+    return out
+
+
+def split_audio(vocals: np.ndarray, mel_hz: np.ndarray, har_hz: np.ndarray, rate: int) -> tuple:
+    """보컬 (n, ch) → (주 선율, 화음) 확인용 오디오. 주 선율 + 화음 = 보컬 (샘플 단위로 정확히).
+
+    화음이 나는 프레임에서만 화음의 배음 자리를 화음 쪽으로 (주 선율과 겹치는 칸은 비율대로).
+    나머지 소리(주 선율, 자음·숨소리, 화음이 없는 구간)는 모두 주 선율 쪽."""
+    n_fft, hop = 2048, rate // transcribe.FPS
+    x = np.asarray(vocals, dtype=np.float32)
+    if x.ndim == 1:
+        x = x[:, None]
+    T = n_frames(len(x), hop)
+    mel_hz, har_hz = _fit(mel_hz, T), _fit(har_hz, T)
+    freqs = np.fft.rfftfreq(n_fft, 1 / rate)
+
+    def mask(t0, t1):
+        mh = transcribe.harmonic_mask(har_hz[t0:t1], freqs, MASK_REL, MASK_MAX)
+        mm = transcribe.harmonic_mask(np.where(har_hz[t0:t1] > 0, mel_hz[t0:t1], 0.0), freqs, MASK_REL, MASK_MAX)
+        s = mh + mm
+        return np.where(s > 1, mh / np.maximum(s, 1e-9), mh).astype(np.float32)
+    har = np.empty_like(x)
+    for ch in range(x.shape[1]):
+        har[:, ch] = masked_resynth(x[:, ch], n_fft, hop, mask)
+    return x - har, har
+
+
+# ------------------------------------------------------- 두 목소리 찾기 ---
+
+def _rmvpe_fn(model, device: str, progress: Callable[[float], None], cancel) -> PitchFn:
     from . import rmvpe
 
+    def fn(a16):
+        return rmvpe.decode(rmvpe.salience_16k(model, a16, device, progress, cancel))
+    return fn
+
+
+def validate_harmony(ma: np.ndarray, mb: np.ndarray, harm_db: np.ndarray, total_db: np.ndarray,
+                     fps: int = transcribe.FPS) -> np.ndarray:
+    """두 번째 목소리 후보(mb) 중 진짜 화음만 남김 (나머지는 NaN). 조건은 모듈 설명 4) 참고."""
+    n = min(len(ma), len(mb), len(harm_db), len(total_db))
+    ma, mb = np.asarray(ma[:n], float), np.asarray(mb[:n], float).copy()
+    ok = np.isfinite(mb) & (harm_db[:n] >= total_db[:n] - HARM_REL_DB)
+    ok &= ~(np.isfinite(ma) & (np.abs(ma - mb) < SAME_VOICE))
+    mb[~ok] = np.nan
+    # 이어진 구간 (높이가 1.5반음 넘게 튀면 끊음, 짧은 끊김은 이음)
+    gap = int(round(HARM_GAP * fps))
+    runs: list = []
+    for a, b in transcribe._runs(np.isfinite(mb)):
+        if runs and a - runs[-1][-1][1] <= gap and abs(mb[a] - mb[runs[-1][-1][1] - 1]) < 1.5:
+            runs[-1].append((a, b))
+        else:
+            runs.append([(a, b)])
+    out = np.full(n, np.nan)
+    min_len, echo = int(round(HARM_MIN * fps)), int(round(ECHO_WINDOW * fps))
+    for parts in runs:
+        s, e = parts[0][0], parts[-1][1]
+        # 구간 안에서도 높이가 크게 튀면 나눔
+        pieces, start = [], s
+        for t in range(s + 1, e):
+            if np.isfinite(mb[t]) and np.isfinite(mb[t - 1]) and abs(mb[t] - mb[t - 1]) >= 1.5:
+                pieces.append((start, t))
+                start = t
+        pieces.append((start, e))
+        for a, b in pieces:
+            if np.sum(np.isfinite(mb[a:b])) < min_len:
+                continue
+            head = mb[a:a + 5]
+            p0 = float(np.nanmedian(head)) if np.isfinite(head).any() else np.nan
+            past = ma[max(0, a - echo):a]
+            now = ma[a:a + 5]
+            sang_before = np.isfinite(p0) and np.any(np.abs(past - p0) <= 0.5)
+            singing_now = np.any(np.abs(now - p0) <= 0.5)
+            if sang_before and not singing_now:            # 주 선율이 방금 떠난 음의 잔향
+                continue
+            out[a:b] = mb[a:b]
+    return out
+
+
+def keep_melody_line(ma: np.ndarray, mh: np.ndarray) -> tuple:
+    """같이 부르는 동안 가장 잘 들리는 목소리가 바뀌어 주 선율 후보가 튀고, 화음이 직전 주 선율을 이어 가면
+    둘을 바꿔 주 선율이 한 사람의 선을 따라가게 함. 반환: (주 선율, 화음)."""
+    mel = np.asarray(ma, float).copy()
+    har = np.asarray(mh, float).copy()
+    last, last_t = np.nan, -100
+    for t in range(len(mel)):
+        a, b = mel[t], har[t]
+        if np.isfinite(a) and np.isfinite(b) and t - last_t <= 10 and np.isfinite(last):
+            if abs(a - last) >= 1.5 and abs(b - last) <= 0.75:
+                mel[t], har[t] = b, a
+        if np.isfinite(mel[t]):
+            last, last_t = mel[t], t
+    return mel, har
+
+
+def voice_candidates(a16: np.ndarray, fn1: PitchFn, fn2: PitchFn, check: Callable[[], None] = lambda: None,
+                     report: Callable[[float, str], None] = lambda f, m: None) -> dict:
+    """16kHz 모노 보컬 → 주 선율 후보(ma), 두 번째 목소리 후보(mb), 그 배음 에너지(harm), 전체 에너지(total).
+    음정은 MIDI 실수(NaN = 없음), 에너지는 dB, 모두 10ms 간격."""
+    fa, _ = fn1(a16)
+    check()
+    report(0.45, "화음 찾는 중")
+    res = cancel_harmonics(a16, fa)
+    check()
+    fb, _ = fn2(res)
+    check()
+    report(0.9, "화음 확인 중")
+    n = min(len(fa), len(fb))
+    fa, fb = _fit(fa, n), _fit(fb, n)
+    total = _fit(total_energy_db(a16), n)
+    loud = float(np.percentile(total[fa > 0], 95)) if (fa > 0).any() else 0.0
+    ma = transcribe.hz_to_midi(np.where(total >= max(ABS_GATE_DB, loud - QUIET_DB), fa, 0.0))
+    mb = transcribe.hz_to_midi(np.where(total >= ABS_GATE_DB, fb, 0.0))
+    harm = _fit(harmonic_energy_db(res, np.where(np.isfinite(mb), fb, 0.0)), n)
+    return {"ma": ma, "mb": mb, "harm": harm, "total": total, "residual": res}
+
+
+def two_voices(model, vocals: np.ndarray, rate: int, device: str = "cpu",
+               progress: Optional[Callable[[float, str], None]] = None,
+               cancel: Optional[threading.Event] = None, pitch_fn: Optional[PitchFn] = None) -> tuple:
+    """보컬 (n, ch) → (주 선율, 화음) 음정 (MIDI 실수, NaN = 없음, 10ms 간격).
+    pitch_fn: 음정 추적 함수 (기본 RMVPE, 검증용으로 바꿔 끼울 수 있음)."""
     report = progress or (lambda f, m: None)
+
+    def check():
+        if cancel is not None and cancel.is_set():
+            raise _Cancelled()
     x = np.asarray(vocals, dtype=np.float32)
     mono = x.mean(axis=1) if x.ndim == 2 else x
-    a16 = audio_io.resample(mono[:, None], rate, rmvpe.SAMPLE_RATE)[:, 0]
-    sal = rmvpe.salience_16k(model, a16, device, lambda f: report(f * 0.45, "첫 번째 목소리 음정 따는 중"), cancel)
-    fa, _ = rmvpe.decode(sal)
-    del sal
-    if cancel is not None and cancel.is_set():
-        raise rmvpe.Cancelled()
-    report(0.45, "두 번째 목소리 찾는 중")
-    res = cancel_harmonics(a16, fa)
-    sal = rmvpe.salience_16k(model, res, device, lambda f: report(0.5 + f * 0.5, "두 번째 목소리 음정 따는 중"),
-                             cancel)
-    fb, _ = rmvpe.decode(sal)
-    n = min(len(fa), len(fb))
-    fa, fb = fa[:n], fb[:n]
-    db_total = transcribe.frame_db(a16, rmvpe.SAMPLE_RATE, n)
-    db_res = transcribe.frame_db(res, rmvpe.SAMPLE_RATE, n)
-    loud = float(np.percentile(db_total[fa > 0], 95)) if (fa > 0).any() else 0.0
-    ma = transcribe.hz_to_midi(np.where(db_total >= max(ABS_GATE_DB, loud - QUIET_DB), fa, 0.0))
-    mb = transcribe.hz_to_midi(np.where(db_res >= np.maximum(db_total - REL_GATE_DB, ABS_GATE_DB), fb, 0.0))
-    mb[np.isfinite(ma) & np.isfinite(mb) & (np.abs(ma - mb) < SAME_VOICE)] = np.nan
-    return ma, mb
+    a16 = audio_io.resample(mono[:, None], rate, SR16)[:, 0]
+    fn1 = pitch_fn or _rmvpe_fn(model, device, lambda f: report(f * 0.45, "주 선율 음정 따는 중"), cancel)
+    fn2 = pitch_fn or _rmvpe_fn(model, device, lambda f: report(0.5 + f * 0.4, "화음 음정 따는 중"), cancel)
+    c = voice_candidates(a16, fn1, fn2, check, report)
+    mh = validate_harmony(c["ma"], c["mb"], c["harm"], c["total"])
+    report(1.0, "화음 확인 완료")
+    return keep_melody_line(c["ma"], mh)
 
 
 # ------------------------------------------------------------------ 실행 ---
@@ -164,7 +311,7 @@ def run(spec: pipeline.JobSpec, work_dir: Path, progress: Optional[ProgressCb] =
         cancel: Optional[threading.Event] = None, previous_prep=None, previous_sep=None,
         previous_sep_key=None, model_name: str = MODEL_NAME) -> HarmonyResult:
     """spec 의 입력·처리 방식·장치·저장 형식·키로 실행. spec.target 은 무시하고
-    MR + 위/아래 성부 확인용 오디오 + 위/아래 성부 MIDI 를 저장."""
+    MR + 주 선율 / 화음 확인용 오디오 + 주 선율 / 화음 MIDI 를 저장."""
     from . import rmvpe
 
     t0 = time.monotonic()
@@ -193,36 +340,35 @@ def run(spec: pipeline.JobSpec, work_dir: Path, progress: Optional[ProgressCb] =
         rate = sep.model_rate
         device = "cuda" if spec.device == "cuda" else "cpu"
         try:
-            ma, mb = two_voices(model, vocals, rate, device, lambda f, m: report(
+            mel, har = two_voices(model, vocals, rate, device, lambda f, m: report(
                 P_DL + (P_B - P_DL) * f, f"{m} {f * 100:.0f}%"), cancel)
-            up, lo = transcribe.assign_voices(ma, mb)
             if cancel.is_set():
                 raise _Cancelled()
-            report(P_B, "위 / 아래 성부 소리 나누는 중…")
-            a_up, a_lo = split_audio(vocals, midi_to_hz(up), midi_to_hz(lo), rate)
+            report(P_B, "주 선율 / 화음 소리 나누는 중…")
+            a_mel, a_har = split_audio(vocals, midi_to_hz(mel), midi_to_hz(har), rate)
         except (rmvpe.Cancelled, _Cancelled) as exc:
             raise pipeline.PipelineCancelled() from exc
         except Exception as exc:  # noqa: BLE001
-            log.exception("two-voice tracking failed")
+            log.exception("harmony tracking failed")
             raise pipeline.PipelineError(engine.friendly_error(exc, "음정 추적"), "separate", "pitch", True) from exc
-        up_path, lo_path = run_dir / "upper.npy", run_dir / "lower.npy"
-        np.save(up_path, a_up)
-        np.save(lo_path, a_lo)
-        n = len(up)
-        db = {"up": transcribe.frame_db(a_up, rate, n), "lo": transcribe.frame_db(a_lo, rate, n)}
-        del a_up, a_lo, vocals
-        exp = _save(spec, prep, sep, run_dir, up_path, lo_path, report, cancel)
+        mel_path, har_path = run_dir / "melody.npy", run_dir / "harmony.npy"
+        np.save(mel_path, a_mel)
+        np.save(har_path, a_har)
+        n = len(mel)
+        db = {"mel": transcribe.frame_db(a_mel, rate, n), "har": transcribe.frame_db(a_har, rate, n)}
+        del a_mel, a_har, vocals
+        exp = _save(spec, prep, sep, run_dir, mel_path, har_path, report, cancel)
         files = list(exp.files)
         notes = []
         if exp.gain_db < 0:
             notes.append(f"0dBFS 를 넘는 부분이 있어 세 파일의 음량을 똑같이 {exp.gain_db:.1f}dB 낮췄습니다.")
         report(P_SAVE, "MIDI 파일 만드는 중…")
-        tuning = transcribe.estimate_tuning(up, lo)
+        tuning = transcribe.estimate_tuning(mel, har)
         song = audio_io.safe_filename(prep.title, 60)
         song_dir = Path(spec.out_dir) / song
         kl = f" [Key {spec.semitones:+d}]" if spec.semitones else ""
         midi, counts = {}, {}
-        for kind, line in (("up", up), ("lo", lo)):
+        for kind, line in (("mel", mel), ("har", har)):
             nts = transcribe.notes_from_pitch(line, db[kind], -200.0, tuning)
             if spec.semitones:
                 nts = transcribe.transpose(nts, spec.semitones)
@@ -232,8 +378,10 @@ def run(spec: pipeline.JobSpec, work_dir: Path, progress: Optional[ProgressCb] =
             files.append(midi[kind])
         if abs(tuning) >= 0.1:
             notes.append(f"원곡 음높이가 기준(A4 = 440Hz)보다 {tuning * 100:+.0f}센트 달라, 그만큼 보정해 음표를 정했습니다.")
-        sung = np.isfinite(up) | np.isfinite(lo)
-        together = float((np.isfinite(up) & np.isfinite(lo))[sung].mean()) if sung.any() else 0.0
+        sung = np.isfinite(mel) | np.isfinite(har)
+        together = float(np.isfinite(har)[sung].mean()) if sung.any() else 0.0
+        if together < 0.02:
+            notes.append("두 목소리가 함께 나는 부분을 거의 찾지 못해 화음 파일은 비어 있을 수 있습니다.")
     finally:
         models.forget(model_name)                 # 큰 모델은 메모리에서 내림 (다음에 다시 불러옴)
         gc.collect()
@@ -263,12 +411,12 @@ def _ensure_model(name: str, report: ProgressCb, cancel: threading.Event):
                                      True) from exc
 
 
-def _save(spec, prep, sep, run_dir: Path, up_path: Path, lo_path: Path, report: ProgressCb,
+def _save(spec, prep, sep, run_dir: Path, mel_path: Path, har_path: Path, report: ProgressCb,
           cancel: threading.Event):
-    """MR · 위/아래 성부 확인용 오디오를 기존 저장 방식(샘플레이트·키 조절·피크 처리)으로 저장."""
+    """MR · 주 선율 / 화음 확인용 오디오를 기존 저장 방식(샘플레이트·키 조절·피크 처리)으로 저장."""
     report(P_SPLIT, "저장 준비 중…")
     residual = sep.stems[-1]
-    src = ExportSource(stems={STEM_KEYS["up"]: up_path, STEM_KEYS["lo"]: lo_path, residual.key: residual.path},
+    src = ExportSource(stems={STEM_KEYS["mel"]: mel_path, STEM_KEYS["har"]: har_path, residual.key: residual.path},
                        residual_key=residual.key, mix44_path=prep.mix44_path, native_path=prep.native_path,
                        native_rate=prep.native_rate, model_rate=sep.model_rate)
     song = audio_io.safe_filename(prep.title, 60)
@@ -283,8 +431,8 @@ def _save(spec, prep, sep, run_dir: Path, up_path: Path, lo_path: Path, report: 
     kl = f" [Key {spec.semitones:+d}]" if spec.semitones else ""
     name = lambda label: audio_io.unique_path(song_dir / audio_io.safe_filename(f"{song} - {label}{kl}{ext}"))  # noqa
     jobs = [ExportJob(name("MR (보컬 제거)"), spec.fmt, "MR", "mr", excluded=list(STEM_KEYS.values()), gains={}),
-            ExportJob(name(f"{LABELS['up']} (확인용)"), spec.fmt, LABELS["up"], "stem", key=STEM_KEYS["up"]),
-            ExportJob(name(f"{LABELS['lo']} (확인용)"), spec.fmt, LABELS["lo"], "stem", key=STEM_KEYS["lo"])]
+            ExportJob(name(f"{LABELS['mel']} (확인용)"), spec.fmt, LABELS["mel"], "stem", key=STEM_KEYS["mel"]),
+            ExportJob(name(f"{LABELS['har']} (확인용)"), spec.fmt, LABELS["har"], "stem", key=STEM_KEYS["har"])]
     rate = prep.native_rate if spec.keep_native_rate else engine.MODEL_RATE
     n = int(prep.n_samples * rate / engine.MODEL_RATE)
     need = sum(audio_io.estimate_export_bytes(n, j.fmt, rate) for j in jobs) + n * 8 * (len(jobs) + 4)

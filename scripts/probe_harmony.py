@@ -1,9 +1,14 @@
-"""화음 따기(두 성부 음정 추적) 점검 (CI 전용, .github/workflows/probe-harmony.yml).
+"""화음 따기(주 선율 + 화음) 점검 (CI 전용, .github/workflows/probe-harmony.yml).
 
-1. RMVPE 음정 추적: 파일 크기·SHA-256, 우리 구현 vs 기준 구현(RVC) — 짧은 곡(한 번에) / 긴 곡(나눠서) 비교
-2. 실제 듀엣 보컬 예제(Sucial 저장소: 섞인 보컬 + 남/여 정답 트랙)로 앱과 같은 코드(harmony.two_voices →
-   transcribe.assign_voices)를 돌려, 정답 트랙을 따로 추적한 결과와 프레임 단위로 비교
-3. 확인용 오디오(split_audio): 위/아래 성부 소리가 정답 남/여 트랙과 얼마나 닮았는지 (SDR)
+1. RMVPE 음정 추적: 우리 구현 vs 기준 구현(RVC) — 짧은 곡(한 번에) / 긴 곡(나눠서)
+2. 정답 트랙이 있는 남/여 예제(Sucial)로 만든 시험곡에서 v1.3.5 방식(위/아래 성부)과 새 방식(주 선율/화음) 비교
+   - 듀엣: 원래 예제 (두 사람이 계속 같이 부름)
+   - 번갈아: 남자 솔로 13초 → 여자 솔로 13초 → 함께 26초 (City of Stars 같은 구성)
+   - 번갈아 + 잔향: 위 곡에 긴 잔향(RT60 1.5초)을 섞음 (잔향이 가짜 두 번째 목소리를 만드는지)
+   지표: 솔로 구간에서 솔로 목소리가 첫 줄에 있는 비율 / 둘째 줄로 새는 비율 / 가짜 화음 비율,
+        함께 부르는 구간에서 두 목소리를 동시에 맞힌 비율, 음표 단위 일치율(F, 시작 ±0.1초·같은 음)
+3. 새 방식 조건별 영향 (배음 에너지 기준, 최소 길이, 잔향 판정, 주 선율 유지)
+4. 확인용 오디오: 솔로 구간의 화음 파일 음량, 함께 부르는 구간의 SDR
 
 결과는 ::notice:: 주석으로 남긴다 (단계마다 주석 수 제한이 있어 마지막에 묶어서).
 """
@@ -153,45 +158,196 @@ def main(work: Path, rvc_root: Path):
     if pm is None or len(ex) < 3:
         return
 
-    # ------------------------------------- 2·3. 실제 듀엣 예제 (앱과 같은 코드) ---
     try:
-        mix, gt_m, gt_f = ex["vocals_raw"], ex["vocals_male"], ex["vocals_female"]
-        t0 = time.time()
-        ma, mb = harmony.two_voices(pm, mix, 44100)
-        up, lo = transcribe.assign_voices(ma, mb)
-        t_track = time.time() - t0
-        t0 = time.time()
-        a_up, a_lo = harmony.split_audio(mix, harmony.midi_to_hz(up), harmony.midi_to_hz(lo), 44100)
-        t_split = time.time() - t0
-        n = len(up)
-        gm = transcribe.hz_to_midi(np.where(transcribe.frame_db(gt_m, 44100, n) > -55,
-                                            rmvpe.track(pm, gt_m, 44100)[0][:n], 0))
-        gf = transcribe.hz_to_midi(np.where(transcribe.frame_db(gt_f, 44100, n) > -55,
-                                            rmvpe.track(pm, gt_f, 44100)[0][:n], 0))
-        note(f"{len(mix) / 44100:.1f}s duet: two_voices {t_track:.1f}s, split_audio {t_split:.1f}s (CPU)")
-        score("APP voices a/b", ma, mb, gm, gf)
-        score("APP upper/lower", up, lo, gm, gf)
-        k = min(len(gm), n)
-        harm = np.isfinite(gm[:k]) & np.isfinite(gf[:k])
-        note(f"upper=female {hit(up[:k], gf[:k])[harm].mean() * 100:.0f}% · lower=male "
-             f"{hit(lo[:k], gm[:k])[harm].mean() * 100:.0f}% (frames with both voices)")
-        m = min(len(a_up), len(gt_f))
-        note(f"preview SDR: upper vs female {sdr(gt_f[:m], a_up[:m]):.1f} dB (mix vs female "
-             f"{sdr(gt_f[:m], mix[:m]):.1f}), lower vs male {sdr(gt_m[:m], a_lo[:m]):.1f} dB (mix vs male "
-             f"{sdr(gt_m[:m], mix[:m]):.1f})")
-        tuning = transcribe.estimate_tuning(up, lo)
-        res = {"female": transcribe.notes_from_pitch(gf, None, -200, tuning),
-               "upper": transcribe.notes_from_pitch(up, transcribe.frame_db(a_up, 44100, n), -200, tuning),
-               "male": transcribe.notes_from_pitch(gm, None, -200, tuning),
-               "lower": transcribe.notes_from_pitch(lo, transcribe.frame_db(a_lo, 44100, n), -200, tuning)}
-        note("notes: " + ", ".join(f"{kk}={len(v)}" for kk, v in res.items()) + f" tuning={tuning:+.2f}")
-        for kk, v in res.items():
-            note(f"{kk}: " + " ".join(f"{x.start:.2f}/{x.end - x.start:.2f}/{x.pitch}" for x in v[:30]))
+        evaluate(lambda a: rmvpe.decode(rmvpe.salience_16k(pm, a)), ex)
     except Exception as exc:  # noqa: BLE001
         import traceback
 
         traceback.print_exc()
-        err(f"end-to-end FAILED: {type(exc).__name__}: {str(exc)[:900]}")
+        err(f"evaluation FAILED: {type(exc).__name__}: {str(exc)[:900]}")
+
+
+# --------------------------------------------------- v1.3.5 방식 (비교용) ---
+
+def assign_voices_v135(a, b, fps=100, link=0.05, hold=0.3):
+    a = np.asarray(a, float)
+    b = np.asarray(b, float)
+    n = min(len(a), len(b))
+    up, lo = np.full(n, np.nan), np.full(n, np.nan)
+    last = {"up": (-10 ** 9, np.nan), "lo": (-10 ** 9, np.nan)}
+    link_f, hold_f = max(1, int(round(link * fps))), int(round(hold * fps))
+    for t in range(n):
+        x, y = a[t], b[t]
+        fx, fy = np.isfinite(x), np.isfinite(y)
+        if fx and fy:
+            hi, low = (x, y) if x >= y else (y, x)
+            up[t], lo[t] = hi, low
+            last["up"], last["lo"] = (t, hi), (t, low)
+            continue
+        if not (fx or fy):
+            continue
+        p = x if fx else y
+        cont = {k: t - last[k][0] <= link_f and abs(p - last[k][1]) < 1.0 for k in ("up", "lo")}
+        if cont["up"] != cont["lo"]:
+            line = "up" if cont["up"] else "lo"
+        elif cont["up"] or (t - last["up"][0] <= hold_f and t - last["lo"][0] <= hold_f):
+            line = "up" if abs(p - last["up"][1]) <= abs(p - last["lo"][1]) else "lo"
+        else:
+            line = "up"
+        (up if line == "up" else lo)[t] = p
+        last[line] = (t, p)
+    return up, lo
+
+
+def old_method(c, a16):
+    n = len(c["ma"])
+    dbt = transcribe.frame_db(a16, 16000, n)
+    dbr = transcribe.frame_db(c["residual"], 16000, n)
+    ma = c["ma"]
+    mb = np.where(dbr >= np.maximum(dbt - 18.0, -55.0), c["mb"], np.nan)
+    mb[np.isfinite(ma) & np.isfinite(mb) & (np.abs(ma - mb) < 1.0)] = np.nan
+    return assign_voices_v135(ma, mb)
+
+
+def new_method(c, **over):
+    saved = {k: getattr(harmony, k) for k in over if k.isupper()}
+    for k, v in saved.items():
+        setattr(harmony, k, over[k])
+    try:
+        mh = harmony.validate_harmony(c["ma"], c["mb"], c["harm"], c["total"])
+        if over.get("keep", True):
+            return harmony.keep_melody_line(c["ma"], mh)
+        return np.asarray(c["ma"], float), mh
+    finally:
+        for k, v in saved.items():
+            setattr(harmony, k, v)
+
+
+# ------------------------------------------------------------------ 평가 ---
+
+def reverb(x: np.ndarray, sr: int = 44100, rt60: float = 1.5, wet: float = 0.35, seed: int = 0) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    n = int(rt60 * sr)
+    t = np.arange(n) / sr
+    out = np.array(x, dtype=np.float64)
+    for ch in range(x.shape[1]):
+        ir = rng.normal(0, 1, n) * np.exp(-6.9 * t / rt60)
+        ir[: int(0.01 * sr)] = 0                         # 10ms 프리딜레이
+        ir /= np.sqrt(np.sum(ir ** 2))
+        m = 1 << int(np.ceil(np.log2(len(x) + n)))
+        y = np.fft.irfft(np.fft.rfft(x[:, ch], m) * np.fft.rfft(ir, m), m)[: len(x)]
+        out[:, ch] += wet * y
+    return out.astype(np.float32)
+
+
+def note_f(est, ref, tol=0.1):
+    used, hit = set(), 0
+    for r in ref:
+        for i, e in enumerate(est):
+            if i not in used and e.pitch == r.pitch and abs(e.start - r.start) <= tol:
+                used.add(i)
+                hit += 1
+                break
+    p = hit / max(1, len(est))
+    r = hit / max(1, len(ref))
+    return 2 * p * r / max(1e-9, p + r)
+
+
+def semis(ns):
+    st = [abs(ns[i + 1].pitch - ns[i].pitch) for i in range(len(ns) - 1) if abs(ns[i + 1].start - ns[i].end) < 0.035]
+    return float(np.mean(np.array(st) == 1)) if st else 0.0
+
+
+def metrics(l1, l2, gm, gf):
+    n = min(len(l1), len(l2), len(gm), len(gf))
+    l1, l2, gm, gf = l1[:n], l2[:n], gm[:n], gf[:n]
+    vm, vf = np.isfinite(gm), np.isfinite(gf)
+    solo = vm ^ vf
+    singer = np.where(vm, gm, gf)
+    harm = vm & vf & (np.abs(np.nan_to_num(gm) - np.nan_to_num(gf)) >= 1.5)
+    r = {}
+    if solo.any():
+        r["solo_in_line1"] = hit(l1, singer)[solo].mean()
+        r["solo_in_line2"] = hit(l2, singer)[solo].mean()
+        r["solo_false_line2"] = (np.isfinite(l2) & ~hit(l2, singer))[solo].mean()
+    if harm.any():
+        r["duet_both"] = ((hit(l1, gm) & hit(l2, gf)) | (hit(l1, gf) & hit(l2, gm)))[harm].mean()
+        r["duet_line2_present"] = np.isfinite(l2)[harm].mean()
+        v2 = np.isfinite(l2) & (vm | vf)
+        r["line2_precision"] = (hit(l2, gm) | hit(l2, gf))[v2].mean() if v2.any() else 0.0
+    return r
+
+
+def fmt(r):
+    return " ".join(f"{k}={v * 100:.0f}%" for k, v in r.items())
+
+
+def evaluate(fn, ex):
+    sr = 44100
+    raw, gm_a, gf_a = ex["vocals_raw"], ex["vocals_male"], ex["vocals_female"]
+    h = len(raw) // 2
+    z = np.zeros_like(raw[:h])
+    alt_m = np.concatenate([gm_a[:h], z[: len(raw) - h], gm_a])
+    alt_f = np.concatenate([z, gf_a[h:], gf_a])
+    alt_mix = np.concatenate([gm_a[:h], gf_a[h:], raw])
+    songs = {"duet": (raw, gm_a, gf_a), "alternating": (alt_mix, alt_m, alt_f),
+             "alternating+reverb": (reverb(alt_mix), alt_m, alt_f)}
+
+    def gt(x, n):
+        f0, _ = fn(audio_io.resample(x.mean(1, keepdims=True), sr, 16000)[:, 0])
+        return transcribe.hz_to_midi(np.where(transcribe.frame_db(x, sr, len(f0)) > -55, f0, 0))[:n]
+    for name, (mix, xm, xf) in songs.items():
+        t0 = time.time()
+        a16 = audio_io.resample(mix.mean(1, keepdims=True), sr, 16000)[:, 0]
+        c = harmony.voice_candidates(a16, fn, fn)
+        n = len(c["ma"])
+        gm, gf = gt(xm, n), gt(xf, n)
+        t_c = time.time() - t0
+        up, lo = old_method(c, a16)
+        mel, har = new_method(c)
+        note(f"[{name}] {len(mix) / sr:.0f}s, candidates {t_c:.1f}s")
+        note(f"[{name}] OLD 위/아래: {fmt(metrics(up, lo, gm, gf))}")
+        note(f"[{name}] NEW 주선율/화음: {fmt(metrics(mel, har, gm, gf))}")
+        # 음표 단위 (솔로 목소리 = 첫 줄 기대). 정답 음표는 정답 트랙을 같은 방식으로 정리한 것
+        solo = np.isfinite(gm) ^ np.isfinite(gf)
+        if solo.any():
+            singer = np.where(np.isfinite(gm), gm, gf)
+            ref = transcribe.notes_from_pitch(np.where(solo, singer, np.nan), None, -200, 0.0)
+            seg = lambda line: transcribe.notes_from_pitch(np.where(solo, line, np.nan), None, -200, 0.0)  # noqa
+            o1, n1 = seg(up), seg(mel)
+            note(f"[{name}] solo notes: ref {len(ref)} | OLD line1 {len(o1)} F={note_f(o1, ref):.2f} | "
+                 f"NEW melody {len(n1)} F={note_f(n1, ref):.2f} | semitone steps ref {semis(ref) * 100:.0f}% "
+                 f"OLD {semis(o1) * 100:.0f}% NEW {semis(n1) * 100:.0f}%")
+        # 조건별 영향
+        if name != "duet" or True:
+            rows = []
+            for label, over in (("harm>=-10dB", {"HARM_REL_DB": 10.0}), ("harm>=-12dB", {"HARM_REL_DB": 12.0}),
+                                ("harm>=-18dB", {"HARM_REL_DB": 18.0}), ("harm>=-25dB", {"HARM_REL_DB": 25.0}),
+                                ("no harm gate", {"HARM_REL_DB": 200.0}), ("min 0.15s", {"HARM_MIN": 0.15}),
+                                ("min 0.4s", {"HARM_MIN": 0.4}), ("no min", {"HARM_MIN": 0.0}),
+                                ("no echo rule", {"ECHO_WINDOW": 0.0}), ("no melody keep", {"keep": False})):
+                m2, h2 = new_method(c, **over)
+                r = metrics(m2, h2, gm, gf)
+                rows.append(f"{label}: " + " ".join(f"{k.split('_', 1)[1]}={v * 100:.0f}" for k, v in r.items()
+                                                   if k in ("solo_false_line2", "duet_both", "line2_precision")))
+            note(f"[{name}] ablation (default -15dB/0.25s/echo/keep): " + " | ".join(rows))
+        # 확인용 오디오
+        a_mel, a_har = harmony.split_audio(mix, harmony.midi_to_hz(mel), harmony.midi_to_hz(har), sr)
+        dv = transcribe.frame_db(mix, sr, n)
+        dh = transcribe.frame_db(a_har, sr, n)
+        msg = []
+        if solo.any():
+            msg.append(f"solo: harmony audio {np.median((dh - dv)[solo]):.1f} dB vs vocals")
+        both = np.isfinite(gm) & np.isfinite(gf)
+        if both.any():
+            idx = np.repeat(both, sr // 100)[: len(mix)]
+            idx = np.pad(idx, (0, len(mix) - len(idx)))
+            mm, ff = xm[idx], xf[idx]
+            hh, me = a_har[idx], a_mel[idx]
+            best = max(sdr(mm, me) + sdr(ff, hh), sdr(ff, me) + sdr(mm, hh)) / 2
+            base = (sdr(mm, mix[idx]) + sdr(ff, mix[idx])) / 2
+            msg.append(f"together: mean SDR {best:.1f} dB (mix as-is {base:.1f} dB)")
+        note(f"[{name}] preview audio: " + "; ".join(msg))
 
 
 if __name__ == "__main__":

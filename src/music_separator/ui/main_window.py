@@ -701,7 +701,7 @@ class MainWindow(QMainWindow):
             ("YouTube 기능 업데이트", self.update_youtube, None),
             ("새 버전 확인", lambda: self.check_for_update(manual=True), None),
             None,
-            ("실험실: 화음 따기 (위 · 아래 성부 MIDI)…", self.start_harmony_job, None),
+            ("실험실: 화음 따기 (주 선율 · 화음 MIDI)…", self.start_harmony_job, None),
             ("로그 폴더 열기", lambda: paths.open_in_file_manager(paths.logs_dir()), None),
             None,
             (f"{APP_NAME} 정보", self.show_about, None),
@@ -2005,14 +2005,14 @@ class MainWindow(QMainWindow):
         box = QMessageBox(self)
         box.setWindowTitle(title)
         box.setIcon(QMessageBox.Icon.Information)
-        box.setText("보컬에서 두 성부를 찾아 위 성부 / 아래 성부 음표(MIDI)로 받아 적습니다 (실험 기능)")
+        box.setText("보컬에서 주 선율과 화음을 찾아 음표(MIDI)로 받아 적습니다 (실험 기능)")
         box.setInformativeText(
             f"대상: {name}\n\n"
-            "• 저장되는 파일: 반주(MR), 위/아래 성부 MIDI, 위/아래 성부 확인용 오디오\n"
-            "• 두 목소리가 함께 나는 곳은 높은 음이 위 성부, 낮은 음이 아래 성부로 들어갑니다. "
-            "한 사람만 부르는 부분은 위 성부에 들어갑니다.\n"
-            "• 세 성부 이상이면 가장 잘 들리는 두 성부만, 같은 음을 옥타브로 겹쳐 부르면 한 성부만 나올 수 있습니다.\n"
-            "• 확인용 오디오는 각 성부를 귀로 확인하는 용도라 음질이 거칩니다 (둘을 더하면 원래 보컬).\n"
+            "• 저장되는 파일: 반주(MR), 주 선율 / 화음 MIDI, 주 선율 / 화음 확인용 오디오\n"
+            "• 주 선율: 매 순간 가장 잘 들리는 목소리 (혼자 부르는 부분 포함, 끊김 없이)\n"
+            "• 화음: 두 목소리가 실제로 함께 나는 구간의 두 번째 목소리만\n"
+            "• 세 성부 이상이면 가장 잘 들리는 두 성부만, 같은 음을 옥타브로 겹쳐 부르면 화음으로 잡히지 않을 수 있습니다.\n"
+            "• 확인용 오디오는 귀로 확인하는 용도라 겹치는 부분의 음질이 거칩니다 (둘을 더하면 원래 보컬).\n"
             "• MIDI 는 120 BPM 기준으로 원곡과 시간이 맞춰져 있습니다 (프로젝트 템포 120, 1마디에 놓기).\n"
             + (f"• 처음 한 번 음정 추적 AI 모델(약 {need_mb}MB)을 내려받습니다.\n" if need_mb else "")
             + "\n시작할까요?")
@@ -2072,8 +2072,8 @@ class MainWindow(QMainWindow):
         box.setWindowTitle("화음 따기 완료 (실험)")
         box.setIcon(QMessageBox.Icon.Information)
         box.setText("파일을 저장했습니다")
-        counts = (f"MIDI 음표: 위 성부 {res.counts.get('up', 0)}개 · 아래 성부 {res.counts.get('lo', 0)}개\n"
-                  f"두 목소리가 함께 나는 부분: 노래 구간의 {res.together * 100:.0f}%")
+        counts = (f"MIDI 음표: 주 선율 {res.counts.get('mel', 0)}개 · 화음 {res.counts.get('har', 0)}개\n"
+                  f"화음이 함께 나는 부분: 노래 구간의 {res.together * 100:.0f}%")
         box.setInformativeText("\n".join(Path(f).name for f in res.files)
                                + f"\n\n{counts}\n걸린 시간: {audio_io.format_time(res.seconds)}"
                                + ("\n" + "\n".join(res.notes) if res.notes else "")

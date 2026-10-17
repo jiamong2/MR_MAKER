@@ -142,7 +142,7 @@ def _song(tmp_path, sec=4.0, sr=44100):
 
 
 def test_harmony_outputs_audio_and_midi(isolated):
-    """MR + 위/아래 성부 오디오 (위 + 아래 = 분리된 보컬) + MIDI 2개, 진행률은 0→1 로만 증가."""
+    """MR + 주 선율/화음 오디오 (주 선율 + 화음 = 분리된 보컬) + MIDI 2개, 진행률은 0→1 로만 증가."""
     pytest.importorskip("torch")
     from music_separator import audio_io, harmony, pipeline
 
@@ -153,16 +153,16 @@ def test_harmony_outputs_audio_and_midi(isolated):
     names = [p.name for p in res.files]
     assert len(names) == 5, names
     assert sum(n.endswith(".wav") for n in names) == 3 and sum(n.endswith(".mid") for n in names) == 2
-    up = next(p for p in res.files if "위 성부" in p.name and p.suffix == ".wav")
-    lo = next(p for p in res.files if "아래 성부" in p.name and p.suffix == ".wav")
+    mel = next(p for p in res.files if "주 선율" in p.name and p.suffix == ".wav")
+    har = next(p for p in res.files if "화음" in p.name and p.suffix == ".wav")
     mr = next(p for p in res.files if "MR" in p.name)
     vocals = np.load(next(s.path for s in res.separation.stems if s.key == "vocals"))
-    a, b = audio_io.decode_audio(up, None), audio_io.decode_audio(lo, None)
+    a, b = audio_io.decode_audio(mel, None), audio_io.decode_audio(har, None)
     assert a.shape == b.shape == vocals.shape
     assert np.max(np.abs(a + b - vocals)) < 1e-5
     orig = audio_io.decode_audio(Path(spec.source), None)
     assert np.max(np.abs(audio_io.decode_audio(mr, None) + vocals - orig)) < 1e-4
-    for kind in ("up", "lo"):
+    for kind in ("mel", "har"):
         notes, bpm, _ = transcribe.read_midi_notes(res.midi[kind].read_bytes())
         assert bpm == pytest.approx(120.0) and len(notes) == res.counts[kind]
         assert all(0 <= n.start < n.end <= 4.1 for n in notes)
@@ -189,7 +189,7 @@ def test_harmony_reuses_previous_separation_and_cancels(isolated):
     ev = threading.Event()
 
     def cancel_at_pitch(f, m):
-        if "첫 번째 목소리" in m:
+        if "주 선율 음정" in m:
             ev.set()
     with pytest.raises(pipeline.PipelineCancelled):
         harmony.run(spec, tmp / "work2", cancel_at_pitch, ev, model_name="rmvpe_unittest")
@@ -203,7 +203,6 @@ def _tone(f0, sec, sr, n_harm=12, amp=0.3):
 
 def test_second_voice_found_after_cancelling_first():
     """큰 목소리(A3)의 배음을 지우면 작은 목소리(E4)의 배음은 남음."""
-    pytest.importorskip("torch")
     from music_separator import harmony
 
     sr = 16000
@@ -221,36 +220,74 @@ def test_second_voice_found_after_cancelling_first():
 
 
 def test_split_audio_gives_each_voice_and_sums_back():
-    pytest.importorskip("torch")
     from music_separator import harmony
 
     sr = 44100
     lo_t, up_t = _tone(196.0, 2.0, sr), _tone(246.94, 2.0, sr)       # G3 + B3
     vocals = np.stack([lo_t + up_t] * 2, axis=1)
     n = 1 + len(vocals) // 441
-    up, lo = harmony.split_audio(vocals, np.full(n, 246.94), np.full(n, 196.0), sr)
-    assert np.max(np.abs(up + lo - vocals)) < 1e-5
+    mel, har = harmony.split_audio(vocals, np.full(n, 246.94), np.full(n, 196.0), sr)
+    assert np.max(np.abs(mel + har - vocals)) < 1e-5
     mid = slice(sr // 2, 3 * sr // 2)
 
     def corr(x, y):
         return float(np.dot(x, y) / np.sqrt(np.dot(x, x) * np.dot(y, y)))
-    assert corr(up[mid, 0], up_t[mid]) > 0.9 and corr(lo[mid, 0], lo_t[mid]) > 0.9
-    solo, rest = harmony.split_audio(vocals, np.full(n, 246.94), np.zeros(n), sr)   # 한 성부만 → 전부 위
-    assert np.max(np.abs(rest)) < 1e-4
+    assert corr(mel[mid, 0], up_t[mid]) > 0.9 and corr(har[mid, 0], lo_t[mid]) > 0.9
+    solo, none = harmony.split_audio(vocals, np.full(n, 246.94), np.zeros(n), sr)   # 화음 없음 → 전부 주 선율
+    assert np.max(np.abs(none)) == 0.0 and np.max(np.abs(solo - vocals)) < 1e-5
 
 
-def test_assign_voices_upper_lower_and_continuity():
+def test_numpy_stft_matches_identity_and_masks():
+    from music_separator import harmony
+
+    x = np.random.default_rng(0).normal(0, 0.1, 16000 * 3 + 77).astype(np.float32)
+    y = harmony.masked_resynth(x, 1024, 160, lambda a, b: np.ones((513, b - a), np.float32), block=97)
+    assert len(y) == len(x) and np.max(np.abs(y - x)) < 1e-5
+    assert harmony.total_energy_db(x).shape == (1 + len(x) // 160,)
+    short = harmony.masked_resynth(x[:300], 1024, 160, lambda a, b: np.ones((513, b - a), np.float32))
+    assert np.max(np.abs(short - x[:300])) < 1e-5
+
+
+def test_validate_harmony_rules():
+    """화음 인정 조건: 배음 에너지, 0.25초 이상, 주 선율 잔향 아님, 같은 음 아님."""
+    from music_separator import harmony
+
+    n = 300
     nan = np.nan
-    a = np.array([60, 60, 60, 60, 60, 60, 60, nan, nan, 55, 55], float)
-    b = np.array([64, 64, nan, 64, 64, nan, nan, nan, nan, nan, nan], float)
-    up, lo = transcribe.assign_voices(a, b)
-    assert list(up[:2]) == [64, 64] and list(lo[:2]) == [60, 60]
-    assert np.isnan(up[2]) and lo[2] == 60                     # 아래 음이 이어지는 중 → 아래 성부에 그대로
-    assert lo[5] == 60 and lo[6] == 60
-    up2, lo2 = transcribe.assign_voices(np.r_[np.full(50, 57.0)], np.full(50, np.nan))
-    assert np.all(up2 == 57) and np.all(np.isnan(lo2))         # 한 사람만 → 위 성부
-    up3, lo3 = transcribe.assign_voices(np.array([67.0, 59.0]), np.array([59.0, 67.0]))
-    assert list(up3) == [67, 67] and list(lo3) == [59, 59]     # 큰 목소리 순서와 상관없이 높이 순
+    ma = np.full(n, 60.0)
+    total = np.full(n, -20.0)
+    harm = np.full(n, -25.0)                       # 보컬 전체보다 5dB 작음 → 충분
+    mb = np.full(n, nan)
+    mb[10:60] = 64.0                               # 0.5초 화음 → 인정
+    mb[80:95] = 67.0                               # 0.15초 → 너무 짧음
+    mb[120:170] = 60.4                             # 주 선율과 같은 음
+    mb[200:260] = 55.0
+    harm[200:260] = -45.0                          # 배음 에너지가 25dB 작음 → 숨소리·잔향
+    out = harmony.validate_harmony(ma, mb, harm, total)
+    assert np.all(out[10:60] == 64.0)
+    assert np.all(np.isnan(out[80:95])) and np.all(np.isnan(out[120:170])) and np.all(np.isnan(out[200:260]))
+    # 잔향: 주 선율이 0.3초 전까지 E4(64) 를 부르다 G4(67) 로 옮긴 직후 E4 가 남아 있는 경우
+    ma2 = np.concatenate([np.full(100, 64.0), np.full(100, 67.0)])
+    mb2 = np.full(200, nan)
+    mb2[100:140] = 64.0
+    out2 = harmony.validate_harmony(ma2, mb2, np.full(200, -25.0), np.full(200, -20.0))
+    assert np.all(np.isnan(out2))
+    # 진짜 화음은 주 선율이 움직여도 처음부터 함께 있었으면 유지
+    mb3 = np.full(200, nan)
+    mb3[0:200] = 60.0
+    out3 = harmony.validate_harmony(ma2, mb3, np.full(200, -25.0), np.full(200, -20.0))
+    assert np.all(out3 == 60.0)
+
+
+def test_keep_melody_line_follows_one_singer():
+    from music_separator import harmony
+
+    nan = np.nan
+    ma = np.array([64, 64, 64, 57, 57, 64, 64, nan, 60], float)    # 가장 큰 목소리가 잠깐 아래 목소리로 바뀜
+    mh = np.array([57, 57, 57, 64, 64, 57, 57, nan, nan], float)
+    mel, har = harmony.keep_melody_line(ma, mh)
+    assert list(mel[:7]) == [64] * 7 and list(har[:7]) == [57] * 7
+    assert mel[8] == 60 and np.isnan(har[8])
 
 
 def test_harmonic_mask_shape():

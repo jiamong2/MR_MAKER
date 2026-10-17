@@ -29,5 +29,5 @@ jobs:
         if: always()
         run: |
           pip install pytest
-          pytest -q tests/test_harmony.py -rfE --tb=short 2>&1 | tee pytest.log
+          QT_QPA_PLATFORM=offscreen pytest -q tests/test_harmony.py tests/test_ui_widgets.py -rfE --tb=short 2>&1 | tee pytest.log
           tail -30 pytest.log | tr '\n' '|' | cut -c1-3500 | sed 's/^/::notice title=pytest::/'
