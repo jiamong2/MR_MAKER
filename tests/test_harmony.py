@@ -274,6 +274,20 @@ def test_validate_harmony_rules():
     assert np.all(out3 == 60.0)
 
 
+def test_lone_second_track_goes_to_melody():
+    """주 선율 후보가 없는 곳에서 두 번째 추적만 잡은 소리(휘파람 등)는 화음이 아니라 주 선율."""
+    from music_separator import harmony
+
+    nan = np.nan
+    n = 100
+    c = {"ma": np.full(n, nan), "mb": np.full(n, 80.0), "harm": np.full(n, -22.0), "total": np.full(n, -20.0)}
+    mel, har = harmony.pick_lines(c)
+    assert np.all(mel == 80.0) and np.all(np.isnan(har))
+    c["harm"] = np.full(n, -40.0)                              # 배음 에너지가 작으면 버림
+    mel, har = harmony.pick_lines(c)
+    assert np.all(np.isnan(mel)) and np.all(np.isnan(har))
+
+
 def test_keep_melody_line_follows_one_singer():
     from music_separator import harmony
 

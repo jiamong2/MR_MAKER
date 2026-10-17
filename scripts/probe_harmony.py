@@ -214,10 +214,13 @@ def new_method(c, **over):
     for k, v in saved.items():
         setattr(harmony, k, over[k])
     try:
-        mh = harmony.validate_harmony(c["ma"], c["mb"], c["harm"], c["total"])
+        if over.get("keep", True) and over.get("fill", True):
+            return harmony.pick_lines(c)
+        ma = harmony.fill_melody(c["ma"], c["mb"], c["harm"], c["total"]) if over.get("fill", True) else c["ma"]
+        mh = harmony.validate_harmony(ma, c["mb"], c["harm"], c["total"])
         if over.get("keep", True):
-            return harmony.keep_melody_line(c["ma"], mh)
-        return np.asarray(c["ma"], float), mh
+            return harmony.keep_melody_line(ma, mh)
+        return np.asarray(ma, float), mh
     finally:
         for k, v in saved.items():
             setattr(harmony, k, v)
@@ -323,18 +326,20 @@ def evaluate(fn, ex):
         # 조건별 영향 (기본값 대비) + 조합 격자
         rows = []
         for label, over in (("no harm gate", {"HARM_REL_DB": 200.0}), ("no min", {"HARM_MIN": 0.0}),
-                            ("no melody keep", {"keep": False})):
+                            ("no melody keep", {"keep": False}), ("no lone->melody", {"fill": False})):
             r = metrics(*new_method(c, **over), gm, gf)
             rows.append(f"{label}: " + " ".join(f"{k.split('_', 1)[1]}={v * 100:.0f}" for k, v in r.items()
                                                if k in ("solo_false_line2", "duet_both", "line2_precision")))
-        note(f"[{name}] ablation (default {harmony.HARM_REL_DB:g}dB/{harmony.HARM_MIN:g}s/keep): " + " | ".join(rows))
+        note(f"[{name}] ablation (default {harmony.HARM_REL_DB:g}/{harmony.HARM_WEAK_DB:g}dB/{harmony.HARM_MIN:g}s): "
+             + " | ".join(rows))
         grid = []
-        for rel in (9.0, 12.0, 15.0):
-            for mn in (0.1, 0.15, 0.25):
-                r = metrics(*new_method(c, HARM_REL_DB=rel, HARM_MIN=mn), gm, gf)
-                grid.append(f"{rel:g}/{mn:g}:{r.get('solo_false_line2', 0) * 100:.0f},"
-                            f"{r.get('duet_both', 0) * 100:.0f},{r.get('line2_precision', 0) * 100:.0f}")
-        note(f"[{name}] grid rel/min: false,both,prec  " + " ".join(grid))
+        for rel in (12.0, 15.0):
+            for weak in (0.0, 15.0, 18.0, 22.0):
+                for mn in (0.1, 0.15, 0.25):
+                    r = metrics(*new_method(c, HARM_REL_DB=rel, HARM_WEAK_DB=weak, HARM_MIN=mn), gm, gf)
+                    grid.append(f"{rel:g}/{weak:g}/{mn:g}:{r.get('solo_false_line2', 0) * 100:.0f},"
+                                f"{r.get('duet_both', 0) * 100:.0f},{r.get('line2_precision', 0) * 100:.0f}")
+        note(f"[{name}] grid rel/weak/min: false,both,prec  " + " ".join(grid))
         # 확인용 오디오
         a_mel, a_har = harmony.split_audio(mix, harmony.midi_to_hz(mel), harmony.midi_to_hz(har), sr)
         dv = transcribe.frame_db(mix, sr, n)
