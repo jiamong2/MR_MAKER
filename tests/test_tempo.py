@@ -80,10 +80,12 @@ def test_tempo_shift_length_and_pitch():
         return np.argmax(np.abs(np.fft.rfft(seg, 1 << 18))) * SR / (1 << 18)
     if not pitch.available():
         pytest.skip("키·템포 엔진 없음")
+    # Rubber Band: 음정 오차 없음 / 대체 엔진(Signalsmith)은 저음에서 수~수십 센트 오차가 알려져 있음 (pitch.py)
+    tol_cents = 3.0 if pitch.find_rbshift() else 20.0
     for tp, semi in ((0.8, 0), (1.25, 0), (0.9, 2)):
         y = pitch.shift(x, semi, SR, tempo=tp)
         assert len(y) == pitch.out_frames(len(x), tp) == int(round(len(x) / tp))
-        assert abs(f0(y) - 220 * 2 ** (semi / 12)) < 0.6
+        assert abs(1200 * np.log2(f0(y) / (220 * 2 ** (semi / 12)))) < tol_cents
     assert pitch.shift(x, 0, SR, tempo=1.0) is not None and len(pitch.shift(x, 0, SR)) == len(x)
     with pytest.raises(ValueError):
         pitch.shift(x, 0, SR, tempo=0.5)
