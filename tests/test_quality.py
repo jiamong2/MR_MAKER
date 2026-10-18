@@ -413,7 +413,7 @@ def test_pipeline_original_target_skips_separation(tmp_path, monkeypatch):
 
     calls = []
     real = pitch.shift
-    monkeypatch.setattr(pitch, "shift", lambda d, s, r=44100, formant=False, cancel=None:
+    monkeypatch.setattr(pitch, "shift", lambda d, s, r=44100, formant=False, cancel=None, tempo=1.0:
                         calls.append((s, r, formant)) or real(d, s, r, formant=formant, cancel=cancel))
     spec = pipeline.JobSpec(str(src), tmp_path / "out2", target="original", semitones=2)
     res = pipeline.Pipeline(spec, tmp_path / "work2").run()
@@ -468,9 +468,9 @@ def test_pipeline_key_applied_once_to_selected_output(tmp_path, monkeypatch):
     calls = []
     real = pitch.shift
 
-    def spy(data, semis, rate=44100, formant=False, cancel=None):
+    def spy(data, semis, rate=44100, formant=False, cancel=None, tempo=1.0):
         calls.append((semis, rate, formant, len(data)))
-        return real(data, semis, rate, formant=formant, cancel=cancel)
+        return real(data, semis, rate, formant=formant, cancel=cancel, tempo=tempo)
     monkeypatch.setattr(pitch, "shift", spy)
     src = _input(tmp_path, 44100)
     spec = pipeline.JobSpec(str(src), tmp_path / "out", target="vocals", semitones=-3,
