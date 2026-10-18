@@ -6,8 +6,8 @@
    - MR(원본 − 보컬)과 마지막(잔여) 트랙: 원본 샘플레이트에서 계산 → 남는 악기는 리샘플링 없이 원본 그대로.
      원본이 48kHz 면 보컬 추정치만 한 번(soxr VHQ) 변환해 뺍니다.
 2. MR = 원본 − 뺄 트랙 (볼륨을 바꾼 트랙이 있으면 그 차이만 더함: 원본 − Σ제외 + Σ(g−1)·남김)
-3. 키 조절은 선택한 결과물에만, 저장 직전에 한 번만 적용 (0 이면 처리 자체를 건너뜀).
-   보컬 트랙은 포먼트 유지 옵션 적용 가능.
+3. 키·템포 조절은 선택한 결과물에만, 저장 직전에 한 번만 (둘을 함께) 적용 (키 0 · 템포 100% 면 건너뜀).
+   보컬 트랙은 포먼트 유지 옵션 적용 가능. 드럼은 키를 바꾸지 않고 템포만 맞춤.
 4. 피크 처리: 리미터·컴프레서·노멀라이즈는 쓰지 않음. 정수 형식이 0dBFS 를 넘을 때만
    모든 파일에 같은 고정 배율로 음량을 낮춤 (파형 모양·트랙 간 균형 그대로).
    - WAV/FLAC: 샘플 피크 ≤ -0.1dBFS
@@ -67,6 +67,7 @@ class ExportJob:
 class ExportOptions:
     keep_native_rate: bool = True
     semitones: int = 0
+    tempo: float = 1.0             # 빠르기 배율 (0.9 = 10% 느리게, 길이 1/0.9 배)
     keep_drums_pitch: bool = True
     formant_vocals: bool = True    # 보컬 트랙 키 변경 시 포먼트(음색) 유지
 
@@ -196,11 +197,13 @@ class Exporter:
 
     def compute(self, job: ExportJob, rate: int) -> np.ndarray:
         semis = self.opts.semitones
+        tempo = float(self.opts.tempo)
         keep_drums = self.opts.keep_drums_pitch
         if job.kind == "stem":
             data = np.array(self.stem(job.key, rate), dtype=np.float32)
-            if semis and not (job.key == "drums" and keep_drums):
-                data = pitch.shift(data, semis, rate, formant=self.formant_for(job), cancel=self.cancel)
+            s = 0 if (job.key == "drums" and keep_drums) else semis
+            if s or tempo != 1.0:
+                data = pitch.shift(data, s, rate, formant=self.formant_for(job), cancel=self.cancel, tempo=tempo)
             return data
         # MR: 원본 − 제외 트랙 + 볼륨 차이
         data = np.array(self.original(rate), dtype=np.float32)
@@ -209,15 +212,15 @@ class Exporter:
         for k, g in job.gains.items():
             if g != 1.0 and k not in job.excluded:
                 data += (np.float32(g) - 1) * np.asarray(self.stem(k, rate), dtype=np.float32)
-        if semis:
+        if semis or tempo != 1.0:
             drums = None
-            if keep_drums and "drums" in self.src.stems and "drums" not in job.excluded:
+            if semis and keep_drums and "drums" in self.src.stems and "drums" not in job.excluded:
                 drums = np.float32(job.gains.get("drums", 1.0)) * np.asarray(self.stem("drums", rate),
                                                                            dtype=np.float32)
                 data -= drums
-            data = pitch.shift(data, semis, rate, formant=False, cancel=self.cancel)
+            data = pitch.shift(data, semis, rate, formant=False, cancel=self.cancel, tempo=tempo)
             if drums is not None:
-                data += drums
+                data += pitch.shift(drums, 0, rate, cancel=self.cancel, tempo=tempo)
         return data
 
     def run(self, jobs: list[ExportJob]) -> ExportReport:
@@ -280,7 +283,7 @@ class Exporter:
             self.progress(1.0, "저장 완료")
             gain_db = _db(gain) if gain < 1.0 else 0.0
             return ExportReport(written, rendered[0][1] if rendered else SAMPLE_RATE, float(gain_db), details,
-                                pitch.engine_name() if self.opts.semitones else "")
+                                pitch.engine_name() if self.opts.semitones or self.opts.tempo != 1.0 else "")
         finally:
             import gc
 

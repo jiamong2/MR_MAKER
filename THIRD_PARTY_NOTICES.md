@@ -8,8 +8,8 @@ MR MAKER for ui.clover 배포 파일에는 다음 오픈소스가 포함됩니�
 | BS-RoFormer 구현 (`roformer.py`) | 고급 엔진 모델 구조 | 자체 구현. 구조는 [lucidrains/BS-RoFormer](https://github.com/lucidrains/BS-RoFormer) (MIT) 와 Lu et al., *Music Source Separation with Band-Split RoPE Transformer* (2023) 를 따름 |
 | BS-RoFormer SW 가중치 (`BS-Roformer-SW.ckpt`, 배포 파일에 **포함하지 않음**, 처음 사용할 때 내려받음) | 품질 우선 보컬 분리 (기본) | 커뮤니티 공개 모델(jarredou 등 공유, [python-audio-separator](https://github.com/nomadkaraoke/python-audio-separator) 릴리스에서 내려받음). **사용 조건이 명시되어 있지 않으므로 개인 용도로만** 사용하고, 상업적 이용 전에는 권리자 확인이 필요합니다 |
 | RMVPE 구현 (`rmvpe.py`) / 가중치 [`rmvpe.pt`](https://huggingface.co/lj1995/VoiceConversionWebUI) (배포 파일에 **포함하지 않음**, 실험 기능을 처음 쓸 때 내려받음) | [실험] 화음 따기 — 보컬 두 성부 음정 추적 (MIDI) | MIT ([RVC-Project](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI) 구현과 같은 구조로 자체 구현, 가중치 저장소 MIT). 논문: Wei et al., *RMVPE: A Robust Model for Vocal Pitch Estimation in Polyphonic Music* (2023) |
-| [Rubber Band Library](https://breakfastquay.com/rubberband/) 4.0 (`native/rbshift/vendor/rubberband`) | 키 조절(피치 시프트, 기본) — 별도 실행 파일 `rbshift` 로 포함 | **GPL-2.0-or-later** (rbshift 도 GPL-2.0-or-later, 소스: `native/rbshift`) |
-| [Signalsmith Stretch](https://github.com/Signalsmith-Audio/signalsmith-stretch) / [python-stretch](https://github.com/gregogiudici/python-stretch) | 키 조절 대체 엔진 (rbshift 가 없을 때) | MIT |
+| [Rubber Band Library](https://breakfastquay.com/rubberband/) 4.0 (`native/rbshift/vendor/rubberband`) | 키·템포 조절(피치 시프트·타임 스트레치, 기본) — 별도 실행 파일 `rbshift` 로 포함 | **GPL-2.0-or-later** (rbshift 도 GPL-2.0-or-later, 소스: `native/rbshift`) |
+| [Signalsmith Stretch](https://github.com/Signalsmith-Audio/signalsmith-stretch) / [python-stretch](https://github.com/gregogiudici/python-stretch) | 키·템포 조절 대체 엔진 (rbshift 가 없을 때) | MIT |
 | [soxr](https://github.com/dofuuz/python-soxr) / libsoxr | 고품질 리샘플링 | LGPL-2.1-or-later (동적 링크된 확장 모듈) |
 | [yt-dlp](https://github.com/yt-dlp/yt-dlp) / [yt-dlp-ejs](https://github.com/yt-dlp/ejs) | YouTube 오디오 받기 | Unlicense / Unlicense AND MIT AND ISC |
 | [Deno](https://deno.com) (PyPI `deno` 패키지의 실행 파일) | YouTube 챌린지 해석용 JavaScript 엔진 — 별도 실행 파일 | MIT (포함된 V8 등은 각자의 BSD 계열 라이선스) |

@@ -254,17 +254,18 @@ class YouTubeLoadThread(QThread):
 
 
 class KeyThread(QThread):
-    """재생용 키 변경: 모든 트랙(44.1kHz)을 미리 변환해 임시 파일로 저장."""
+    """재생용 키·템포 변경: 모든 트랙(44.1kHz)을 미리 변환해 임시 파일로 저장 (키와 템포는 한 번에 처리)."""
 
     progress = Signal(float, str)
-    done = Signal(int, dict)       # semitones, {key: npy 경로}
+    done = Signal(object, dict)    # (semitones, tempo %), {key: npy 경로}
     failed = Signal(str)
 
     def __init__(self, tracks: dict, semitones: int, keep_drums: bool, out_dir: Path, parent=None,
-                 formant_vocals: bool = True):
+                 formant_vocals: bool = True, tempo_pct: int = 100):
         super().__init__(parent)
         self.tracks = dict(tracks)          # key -> 원래 44.1kHz npy 경로
         self.semitones = semitones
+        self.tempo_pct = int(tempo_pct)
         self.keep_drums = keep_drums
         self.formant_vocals = formant_vocals
         self.out_dir = Path(out_dir)
@@ -273,35 +274,47 @@ class KeyThread(QThread):
     def cancel(self):
         self.cancel_event.set()
 
+    def label(self) -> str:
+        parts = []
+        if self.semitones:
+            parts.append(f"키 {self.semitones:+d}")
+        if self.tempo_pct != 100:
+            parts.append(f"빠르기 {self.tempo_pct}%")
+        return " · ".join(parts) or "원래대로"
+
     def run(self):
         try:
             result: dict = {}
             todo = []
             for key, path in self.tracks.items():
-                if self.semitones == 0 or (key == "drums" and self.keep_drums):
+                semis = 0 if (key == "drums" and self.keep_drums) else self.semitones
+                if semis == 0 and self.tempo_pct == 100:
                     result[key] = Path(path)
                 else:
-                    todo.append((key, Path(path)))
+                    todo.append((key, Path(path), semis))
             self.out_dir.mkdir(parents=True, exist_ok=True)
             done = [0]
             lock = threading.Lock()
-            label = pitch.key_label(self.semitones)
+            label = self.label()
+            verb = "키·템포 변경 중" if self.semitones and self.tempo_pct != 100 else (
+                "템포 변경 중" if self.tempo_pct != 100 else "키 변경 중")
 
             def work(item):
-                key, path = item
+                key, path, semis = item
                 if self.cancel_event.is_set():
                     return None
                 data = np.load(path, mmap_mode="r")
-                out = pitch.shift(data, self.semitones, audio_io.SAMPLE_RATE,
-                                  formant=self.formant_vocals and key == "vocals", cancel=self.cancel_event)
-                dst = self.out_dir / f"{key}_k{self.semitones:+d}.npy"
+                out = pitch.shift(data, semis, audio_io.SAMPLE_RATE,
+                                  formant=self.formant_vocals and key == "vocals", cancel=self.cancel_event,
+                                  tempo=self.tempo_pct / 100)
+                dst = self.out_dir / f"{key}_k{semis:+d}_t{self.tempo_pct}.npy"
                 np.save(dst, out)
                 with lock:
                     done[0] += 1
-                    self.progress.emit(done[0] / max(1, len(todo)), f"키 변경 중 ({label}) {done[0]}/{len(todo)}")
+                    self.progress.emit(done[0] / max(1, len(todo)), f"{verb} ({label}) {done[0]}/{len(todo)}")
                 return key, dst
 
-            self.progress.emit(0.0, f"키 변경 중 ({label})…")
+            self.progress.emit(0.0, f"{verb} ({label})…")
             if pitch.find_rbshift() and len(todo) > 1:
                 # Rubber Band 는 별도 프로세스라 트랙을 동시에 처리 (코어 수만큼)
                 import os
@@ -319,12 +332,32 @@ class KeyThread(QThread):
                         result[r[0]] = r[1]
             if self.cancel_event.is_set():
                 return
-            self.done.emit(self.semitones, result)
+            self.done.emit((self.semitones, self.tempo_pct), result)
         except pitch.PitchCancelled:
             return
         except BaseException as exc:  # noqa: BLE001
-            log.exception("key shift failed")
-            self.failed.emit(engine.friendly_error(exc, "키 변경"))
+            log.exception("key/tempo change failed")
+            self.failed.emit(engine.friendly_error(exc, "키·템포 변경"))
+
+
+class BpmThread(QThread):
+    """원곡 BPM 추정 (참고 표시용)."""
+
+    done = Signal(str, object)     # 원본 경로, tempo.TempoEstimate
+
+    def __init__(self, path: Path, parent=None):
+        super().__init__(parent)
+        self.path = Path(path)
+
+    def run(self):
+        from .. import tempo
+
+        try:
+            est = tempo.estimate(np.load(self.path, mmap_mode="r"), audio_io.SAMPLE_RATE)
+        except Exception:  # noqa: BLE001
+            log.exception("bpm estimate failed")
+            est = tempo.TempoEstimate(0.0, 0.0, 0.0)
+        self.done.emit(str(self.path), est)
 
 
 class UpdateCheckThread(QThread):

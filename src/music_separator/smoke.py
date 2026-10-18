@@ -146,22 +146,34 @@ class GuiSmoke:
             self.step = "export_guide"
         elif self.step == "export_guide":
             w.key_slider.setValue(-3)
+            w.tempo_slider.setValue(90)          # 키와 템포를 함께 (한 번에 처리)
             w._apply_key()
             self.wait_t = time.monotonic()
             self.step = "key"
         elif self.step == "key":
-            if w.key_semitones != -3:
+            if w.key_semitones != -3 or w.tempo_applied != 90:
                 if time.monotonic() - self.wait_t > 300:
-                    return self._finish(False, "key shift timeout")
+                    return self._finish(False, "key/tempo shift timeout")
                 return
-            self._log(f"key -3 applied to {len(w.mixer.tracks)} tracks")
+            want = w.loaded.seconds / 0.9
+            if abs(w.mixer.duration - want) > 0.05:
+                return self._finish(False, f"tempo 90% playback length {w.mixer.duration:.2f}s != {want:.2f}s")
+            self._log(f"key -3 + tempo 90% applied to {len(w.mixer.tracks)} tracks ({w.mixer.duration:.2f}s)")
             w.export_vocals()
             self.step = "done_wait"
         elif self.step == "done_wait":
             files = self._outputs()
             self._log(f"exported {len(files)} files: {[f.name for f in files]}")
             self.step = "done"
-            ok = (len(files) >= 6 and any("가이드 보컬 25%" in f.name for f in files)
-                  and any("Key -3" in f.name and "보컬" in f.name for f in files)
+            shifted = [f for f in files if "Key -3" in f.name and "Tempo 90%" in f.name and "보컬" in f.name]
+            ok = (len(files) >= 6 and any("가이드 보컬 25%" in f.name for f in files) and len(shifted) == 1
                   and sum(1 for f in files if f.suffix == ".flac") == 2)
+            if ok:
+                from . import audio_io
+
+                sec = audio_io.probe_audio(shifted[0]).duration
+                want = w.loaded.seconds / 0.9
+                self._log(f"tempo 90% export length {sec:.2f}s (want {want:.2f}s)")
+                if abs(sec - want) > 0.06:
+                    return self._finish(False, f"tempo export length {sec:.2f}s != {want:.2f}s")
             return self._finish(ok, "" if ok else "missing exports")

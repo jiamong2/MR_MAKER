@@ -112,7 +112,7 @@ def apply(app) -> None:
     # Windows 는 메뉴·툴팁·대화상자에 시스템 글꼴 설정(힌팅 포함)을 따로 적용한다.
     # Pretendard(CFF) 를 힌팅해 작게 그리면 '그' 의 가로획 같은 얇은 획이 사라지므로 모든 위젯에 동일하게 맞춘다.
     for cls in ("QMenu", "QMenuBar", "QToolTip", "QMessageBox", "QDialog", "QComboBox",
-                "QAbstractItemView", "QHeaderView", "QLineEdit", "QPushButton", "QLabel"):
+                "QAbstractItemView", "QHeaderView", "QLineEdit", "QAbstractSpinBox", "QPushButton", "QLabel"):
         app.setFont(font(13), cls)
     global _font_fixer
     _font_fixer = _NoHintingFilter(app)
@@ -249,6 +249,10 @@ QMessageBox, QDialog {{ background: {SURFACE}; }}
 QLineEdit {{ background: #ffffff; border: 1px solid {BORDER_2}; border-radius: 8px; padding: 7px 10px; color: {TEXT};
              selection-background-color: {ACCENT_SOFT_2}; selection-color: {TEXT}; }}
 QLineEdit:focus {{ border-color: {ACCENT}; }}
+QAbstractSpinBox {{ background: #ffffff; border: 1px solid {BORDER_2}; border-radius: 8px; padding: 6px 10px;
+                    color: {TEXT}; selection-background-color: {ACCENT_SOFT_2}; selection-color: {TEXT}; }}
+QAbstractSpinBox:focus {{ border-color: {ACCENT}; }}
+QAbstractSpinBox:disabled {{ color: {TEXT_FAINT}; background: {SURFACE_2}; }}
 
 /* 홈 화면 */
 QWidget#HomeRoot {{ background: {BG}; }}

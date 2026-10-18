@@ -1,10 +1,12 @@
-// rbshift — Rubber Band Library(R3 "finer" 엔진)로 길이를 유지한 채 음높이만 바꾸는 작은 명령행 도구.
+// rbshift — Rubber Band Library(R3 "finer" 엔진)로 음높이(키)와 빠르기(템포)를 바꾸는 작은 명령행 도구.
 //
 // MR MAKER 가 별도 프로세스로 실행합니다 (FFmpeg 와 같은 방식).
 //   입력: stdin 으로 float32 리틀엔디언 인터리브 PCM (전체)
-//   출력: stdout 으로 같은 길이·같은 채널의 float32 PCM
+//   출력: stdout 으로 같은 채널의 float32 PCM. 템포가 1 이면 같은 길이, 아니면 --out-frames 프레임
 //
-// 사용: rbshift --rate 44100 --channels 2 --semitones -3 [--formant] [--engine finer|faster]
+// 사용: rbshift --rate 44100 --channels 2 --semitones -3 [--tempo 0.9 --out-frames N] [--formant]
+//              [--engine finer|faster]
+//       --tempo: 빠르기 배율 (0.9 = 10% 느리게 → 길이 1/0.9 배). 음높이는 --semitones 로만 바뀜
 //       rbshift --version
 //
 // 라이선스: 이 도구는 Rubber Band Library(GPL-2.0-or-later)를 포함하므로 GPL-2.0-or-later 로 배포됩니다.
@@ -25,7 +27,8 @@
 using RubberBand::RubberBandStretcher;
 
 static int usage() {
-    std::fprintf(stderr, "usage: rbshift --rate HZ --channels N --semitones S [--formant] [--engine finer|faster]\n");
+    std::fprintf(stderr, "usage: rbshift --rate HZ --channels N --semitones S [--tempo T --out-frames N] [--formant] "
+                         "[--engine finer|faster]\n");
     return 2;
 }
 
@@ -34,7 +37,8 @@ int main(int argc, char **argv) {
     _setmode(_fileno(stdin), _O_BINARY);
     _setmode(_fileno(stdout), _O_BINARY);
 #endif
-    double rate = 0, semitones = 0;
+    double rate = 0, semitones = 0, tempo = 1.0;
+    long long outFrames = -1;
     int channels = 0;
     bool formant = false, finer = true;
     for (int i = 1; i < argc; ++i) {
@@ -44,16 +48,19 @@ int main(int argc, char **argv) {
             return argv[++i];
         };
         if (a == "--version") {
-            std::printf("rbshift 1.0 (Rubber Band Library %s)\n", RUBBERBAND_VERSION);
+            std::printf("rbshift 1.1 (Rubber Band Library %s)\n", RUBBERBAND_VERSION);
             return 0;
         } else if (a == "--rate") rate = std::atof(next("--rate"));
         else if (a == "--channels") channels = std::atoi(next("--channels"));
         else if (a == "--semitones") semitones = std::atof(next("--semitones"));
+        else if (a == "--tempo") tempo = std::atof(next("--tempo"));
+        else if (a == "--out-frames") outFrames = std::atoll(next("--out-frames"));
         else if (a == "--formant") formant = true;
         else if (a == "--engine") finer = std::string(next("--engine")) != "faster";
         else return usage();
     }
     if (rate < 8000 || rate > 768000 || channels < 1 || channels > 16 || std::fabs(semitones) > 48) return usage();
+    if (!(tempo >= 0.25 && tempo <= 4.0)) return usage();
 
     // 입력 전체 읽기
     std::vector<float> in;
@@ -68,6 +75,7 @@ int main(int argc, char **argv) {
     }
     const size_t n = in.size() / channels;
     if (n == 0) return 0;
+    const size_t nOut = outFrames >= 0 ? (size_t)outFrames : (tempo == 1.0 ? n : (size_t)std::llround(n / tempo));
 
     RubberBandStretcher::Options opts = RubberBandStretcher::OptionProcessOffline |
                                          RubberBandStretcher::OptionChannelsTogether |
@@ -75,7 +83,7 @@ int main(int argc, char **argv) {
                                          RubberBandStretcher::OptionThreadingNever |
                                          (finer ? RubberBandStretcher::OptionEngineFiner : RubberBandStretcher::OptionEngineFaster) |
                                          (formant ? RubberBandStretcher::OptionFormantPreserved : RubberBandStretcher::OptionFormantShifted);
-    RubberBandStretcher rb((size_t)rate, (size_t)channels, opts, 1.0, std::pow(2.0, semitones / 12.0));
+    RubberBandStretcher rb((size_t)rate, (size_t)channels, opts, 1.0 / tempo, std::pow(2.0, semitones / 12.0));
     rb.setDebugLevel(0);
     const size_t block = 16384;
     rb.setExpectedInputDuration(n);
@@ -116,10 +124,10 @@ int main(int argc, char **argv) {
     }
     while (drain() >= 0) { /* available() 가 -1 이 될 때까지 (처리 완료) */ }
 
-    // 3) 정확히 같은 길이로 출력
-    std::vector<float> out(n * channels, 0.f);
+    // 3) 정해진 길이로 출력 (템포 1 이면 입력과 같은 길이)
+    std::vector<float> out(nOut * channels, 0.f);
     for (int c = 0; c < channels; ++c) {
-        size_t m = std::min(n, outPlanar[c].size());
+        size_t m = std::min(nOut, outPlanar[c].size());
         for (size_t i = 0; i < m; ++i) out[i * channels + c] = outPlanar[c][i];
     }
     size_t written = std::fwrite(out.data(), sizeof(float), out.size(), stdout);

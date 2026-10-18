@@ -14,10 +14,10 @@ from PySide6.QtGui import QAction, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                                QFileDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMainWindow,
                                QMessageBox, QProgressBar, QPushButton, QScrollArea, QScrollBar, QSizePolicy, QSlider,
-                               QStackedWidget, QVBoxLayout, QWidget)
+                               QDoubleSpinBox, QStackedWidget, QVBoxLayout, QWidget)
 
 from .. import (APP_BRAND, APP_NAME, APP_SHORT, __version__, audio_io, engine, models, paths, pipeline, pitch, system,
-                youtube)
+                tempo, youtube)
 from ..dsp import audible_flags
 from ..player import Mixer, Player, Track
 from . import icons, theme
@@ -26,7 +26,7 @@ from .widgets import (COLUMN_GAP, HEADER_WIDTH, ROW_SPACING, ChipButton, DropZon
                       PathMenu, PlayButton, TimeRuler, TrackRow, TracksPanel, Viewport, glow, icon_button, label, repolish,
                       text_button)
 from ..export import ExportJob, ExportOptions, ExportSource
-from .workers import (ExportThread, HarmonyThread, KeyThread, LoadedAudio, LoadThread, PipelineThread, SeparationThread,
+from .workers import (BpmThread, ExportThread, HarmonyThread, KeyThread, LoadedAudio, LoadThread, PipelineThread, SeparationThread,
                       UpdateCheckThread, UpdateDownloadThread, YouTubeLoadThread,
                       YouTubeUpdateThread)
 
@@ -179,7 +179,12 @@ class MainWindow(QMainWindow):
         self.key_thread: Optional[KeyThread] = None
         self.key_semitones = 0                 # 재생에 적용된 키
         self.key_target = 0                    # 사용자가 고른 키
-        self.key_cache: dict = {}              # semitones -> {track: npy 경로}
+        self.tempo_applied = 100               # 재생에 적용된 빠르기 (%)
+        self.tempo_target = 100                # 사용자가 고른 빠르기 (%)
+        self.key_cache: dict = {}              # (semitones, tempo %) -> {track: npy 경로}
+        self.bpm_thread: Optional[BpmThread] = None
+        self.bpm_original = 0.0                # 원곡 BPM (추정값 또는 사용자가 고친 값, 0 = 모름)
+        self._bpm_sync = False
         self.track_paths: dict = {}            # 원래(0키) 44.1kHz 트랙 경로
         self.keep_native_rate = True
         self.last_error: Optional[str] = None
@@ -567,6 +572,99 @@ class MainWindow(QMainWindow):
         self.key_timer.setInterval(450)       # 슬라이더를 움직이는 동안은 기다렸다가 처리
         self.key_timer.timeout.connect(self._apply_key)
         lay.addWidget(c)
+
+        # ---- 4. 템포 조절 ----
+        c, cl = card("4", "템포 조절", "TEMPO")
+        trow = QHBoxLayout()
+        trow.setSpacing(10)
+        self.tempo_down = text_button("−", None, "step", 44)
+        self.tempo_down.setFixedWidth(44)
+        self.tempo_down.setToolTip("1% 느리게")
+        self.tempo_down.clicked.connect(lambda: self.tempo_slider.setValue(self.tempo_slider.value() - 1))
+        self.tempo_value = QLabel("100%")
+        self.tempo_value.setObjectName("KeyValue")
+        self.tempo_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tempo_value.setMinimumWidth(70)
+        self.tempo_up = text_button("+", None, "step", 44)
+        self.tempo_up.setFixedWidth(44)
+        self.tempo_up.setToolTip("1% 빠르게")
+        self.tempo_up.clicked.connect(lambda: self.tempo_slider.setValue(self.tempo_slider.value() + 1))
+        self.tempo_reset = text_button("원래 빠르기", None, None, 36)
+        self.tempo_reset.clicked.connect(lambda: self.tempo_slider.setValue(100))
+        trow.addWidget(self.tempo_down)
+        trow.addWidget(self.tempo_value, 1)
+        trow.addWidget(self.tempo_up)
+        trow.addSpacing(4)
+        trow.addWidget(self.tempo_reset)
+        cl.addLayout(trow)
+        self.tempo_slider = QSlider(Qt.Orientation.Horizontal)
+        self.tempo_slider.setRange(pitch.TEMPO_MIN, pitch.TEMPO_MAX)
+        self.tempo_slider.setValue(100)
+        self.tempo_slider.setPageStep(5)
+        self.tempo_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.tempo_slider.setToolTip(f"빠르기를 조절합니다 ({pitch.TEMPO_MIN}% ~ {pitch.TEMPO_MAX}%, 음높이는 그대로)")
+        self.tempo_slider.valueChanged.connect(self._on_tempo_slider)
+        cl.addWidget(self.tempo_slider)
+        ends = QHBoxLayout()
+        ends.addWidget(label(f"{pitch.TEMPO_MIN}% (느리게)", "faint"))
+        ends.addStretch(1)
+        ends.addWidget(label(f"{pitch.TEMPO_MAX}% (빠르게)", "faint"))
+        cl.addLayout(ends)
+        quick = QHBoxLayout()
+        quick.setSpacing(6)
+        for d in (-10, -5, 5, 10):
+            b = text_button(f"{d:+d}%", None, None, 30)
+            b.setToolTip(f"지금보다 {abs(d)}% {'느리게' if d < 0 else '빠르게'}")
+            b.clicked.connect(lambda _=False, d=d: self.tempo_slider.setValue(self.tempo_slider.value() + d))
+            quick.addWidget(b, 1)
+        cl.addLayout(quick)
+        brow = QHBoxLayout()
+        brow.setSpacing(6)
+        brow.addWidget(label("원곡", "faint"))
+        brow.addSpacing(2)
+        self.bpm_orig = QDoubleSpinBox()
+        self.bpm_orig.setRange(0.0, 300.0)
+        self.bpm_orig.setDecimals(1)
+        self.bpm_orig.setSingleStep(1.0)
+        self.bpm_orig.setSpecialValueText("모름")
+        self.bpm_orig.setSuffix(" BPM")
+        self.bpm_orig.setToolTip("원곡 BPM (자동으로 추정한 참고값). 알고 있으면 직접 고쳐 주세요.")
+        self.bpm_orig.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+        self.bpm_orig.valueChanged.connect(self._on_bpm_original)
+        self.bpm_half = text_button("절반", None, None, 32)
+        self.bpm_half.setFixedWidth(52)
+        self.bpm_half.setToolTip("추정값이 두 배로 잡혔을 때 (예: 120 → 60)")
+        self.bpm_half.clicked.connect(lambda: self.bpm_orig.setValue(self.bpm_orig.value() / 2))
+        self.bpm_double = text_button("2배", None, None, 32)
+        self.bpm_double.setFixedWidth(52)
+        self.bpm_double.setToolTip("추정값이 절반으로 잡혔을 때 (예: 60 → 120)")
+        self.bpm_double.clicked.connect(lambda: self.bpm_orig.setValue(min(300.0, self.bpm_orig.value() * 2)))
+        brow.addWidget(self.bpm_orig, 1)
+        brow.addWidget(self.bpm_half)
+        brow.addWidget(self.bpm_double)
+        cl.addLayout(brow)
+        grow = QHBoxLayout()
+        grow.setSpacing(6)
+        grow.addWidget(label("목표", "faint"))
+        grow.addSpacing(2)
+        self.bpm_target = QDoubleSpinBox()
+        self.bpm_target.setRange(0.0, 400.0)
+        self.bpm_target.setDecimals(1)
+        self.bpm_target.setSingleStep(1.0)
+        self.bpm_target.setSpecialValueText("—")
+        self.bpm_target.setSuffix(" BPM")
+        self.bpm_target.setToolTip("원하는 BPM 을 넣고 Enter 를 누르면 빠르기(%)로 바꿔 적용합니다.")
+        self.bpm_target.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+        self.bpm_target.editingFinished.connect(self._on_bpm_target)
+        grow.addWidget(self.bpm_target, 1)
+        grow.addSpacing(110)                 # 위 줄의 [절반][2배] 자리만큼 비워 칸 너비를 맞춤
+        cl.addLayout(grow)
+        self.tempo_hint = label("음높이는 그대로, 빠르기만 바뀝니다. 100% 면 처리하지 않습니다. 재생과 저장에 모두 적용됩니다. "
+                                "원곡 BPM 은 자동으로 추정한 참고값이라 틀릴 수 있어요 — 알고 있으면 직접 고쳐 주세요.",
+                                "faint", wrap=True)
+        cl.addWidget(self.tempo_hint)
+        lay.addWidget(c)
+        self._show_bpm(0.0)
         lay.addStretch(1)
         scroll.setWidget(panel)
         return scroll
@@ -981,6 +1079,8 @@ class MainWindow(QMainWindow):
         self.empty_hint.show()
         self.track_paths = {"original": la.mix_path}
         self._invalidate_key_cache()
+        self._reset_tempo()
+        self._start_bpm(la)
         self.set_status(f"{la.source.name} ({audio_io.format_time(la.seconds)}) — 모드를 고르고 "
                         "[AI 분리 시작]을 누르세요.")
         self._set_state()
@@ -1142,7 +1242,7 @@ class MainWindow(QMainWindow):
             self.last_sep = res
             self.last_sep_key = pipeline.separation_key(self.loaded.source_id, res.model, res.preset)
         self._set_state()
-        if self.key_target != 0:
+        if (self.key_target, self.tempo_target) != (0, 100):
             self._apply_key()
 
     def _source_files(self) -> set:
@@ -1344,7 +1444,7 @@ class MainWindow(QMainWindow):
         return engine.stem_label(key, self.result.mode if self.result else MODE)
 
     def _key_suffix(self) -> str:
-        return f" [Key {self.key_target:+d}]" if self.key_target else ""
+        return (f" [Key {self.key_target:+d}]" if self.key_target else "") + pitch.tempo_suffix(self.tempo_target)
 
     def _stem_jobs(self, keys: list[str]) -> list[ExportJob]:
         fmt = self.fmt_combo.currentData()
@@ -1394,6 +1494,7 @@ class MainWindow(QMainWindow):
                         "[설정…]에서 다른 폴더를 선택해 주세요.")
             return
         opts = ExportOptions(keep_native_rate=self.keep_native_rate, semitones=self.key_target,
+                             tempo=self.tempo_target / 100,
                              keep_drums_pitch=True, formant_vocals=self.formant_box.isChecked())
         self.export_thread = ExportThread(self._export_source(), jobs, opts, self.session_dir, self)
         self.export_thread.progress.connect(self._on_progress)
@@ -1462,23 +1563,24 @@ class MainWindow(QMainWindow):
             self.key_thread.cancel()
         self.key_cache = {}
         self.key_semitones = 0
+        self.tempo_applied = 100
 
     def _apply_key(self):
-        """재생 중인 트랙에 키 변경 적용 (캐시가 있으면 즉시, 없으면 백그라운드로 변환)."""
+        """재생 중인 트랙에 키·템포 변경 적용 (캐시가 있으면 즉시, 없으면 백그라운드로 변환)."""
         if not self.track_paths:
             return
-        target = self.key_target
-        if target == 0 or target in self.key_cache:
+        target = (self.key_target, self.tempo_target)
+        if target == (0, 100) or target in self.key_cache:
             self._swap_tracks(target, self.key_cache.get(target, self.track_paths))
             return
         if self.key_thread is not None:
             self.key_thread.cancel()
-        t = KeyThread(self.track_paths, target, True, self.session_dir / "key", self,
-                      formant_vocals=self.formant_box.isChecked())
+        t = KeyThread(self.track_paths, target[0], True, self.session_dir / "key", self,
+                      formant_vocals=self.formant_box.isChecked(), tempo_pct=target[1])
         gen = id(self.track_paths)
         t.progress.connect(lambda f, m: self.set_status(m, "busy"))
         t.done.connect(lambda semis, paths_, gen=gen: self._on_key_done(semis, paths_, gen))
-        t.failed.connect(lambda m: (self.set_status("키 변경 실패", "error"), self._error(m)))
+        t.failed.connect(lambda m: (self.set_status("키·템포 변경 실패", "error"), self._error(m)))
         t.finished.connect(lambda t=t: self._key_thread_finished(t))
         self.key_thread = t
         t.start()
@@ -1488,25 +1590,106 @@ class MainWindow(QMainWindow):
             self.key_thread = None
         t.deleteLater()
 
-    def _on_key_done(self, semis: int, paths_: dict, gen: int):
+    def _on_key_done(self, state, paths_: dict, gen: int):
         if gen != id(self.track_paths):   # 그 사이 새 파일/새 분리 결과로 바뀜
             return
-        self.key_cache[semis] = paths_
-        if semis == self.key_target:
-            self._swap_tracks(semis, paths_)
+        state = tuple(state)
+        self.key_cache[state] = paths_
+        if state == (self.key_target, self.tempo_target):
+            self._swap_tracks(state, paths_)
         else:
             self._apply_key()
 
-    def _swap_tracks(self, semis: int, paths_: dict):
+    def _swap_tracks(self, state, paths_: dict):
+        semis, tempo_pct = state
+        old_len, old_pos = self.mixer.length, self.mixer.position
         for t in self.mixer.tracks:
             p = paths_.get(t.key)
             if p is not None:
                 t.data = self._np_load(p)
         self.mixer.set_tracks(list(self.mixer.tracks))
+        if old_len and self.mixer.length != old_len:     # 템포가 바뀌면 같은 음악 위치에서 이어서
+            self.mixer.seek(int(old_pos * self.mixer.length / old_len))
+        if self.mixer.length:
+            self.lcd.len_lbl.setText(audio_io.format_time(self.mixer.duration))
+            self.ruler.set_duration(self.mixer.duration)
         self.key_semitones = semis
-        label = pitch.key_label(semis)
+        self.tempo_applied = tempo_pct
+        parts = [f"키: {pitch.key_label(semis)}"]
+        if tempo_pct != 100:
+            parts.append(f"빠르기: {tempo_pct}%")
         if not self.busy():
-            self.set_status(f"키: {label}" + (" · 재생과 저장에 적용됩니다" if semis else ""))
+            self.set_status(" · ".join(parts) + (" · 재생과 저장에 적용됩니다" if (semis, tempo_pct) != (0, 100) else ""))
+
+    # ============================================================ tempo ===
+    def _on_tempo_slider(self, v: int):
+        self.tempo_target = int(v)
+        self.tempo_value.setText(f"{v}%")
+        self.tempo_value.setStyleSheet("" if v == 100 else f"color:{theme.ACCENT_2};")
+        self._show_bpm(self.bpm_original)
+        if self.track_paths:
+            self.key_timer.start()
+
+    def _reset_tempo(self):
+        self.tempo_slider.blockSignals(True)
+        self.tempo_slider.setValue(100)
+        self.tempo_slider.blockSignals(False)
+        self.tempo_target = 100
+        self.tempo_value.setText("100%")
+        self.tempo_value.setStyleSheet("")
+
+    def _show_bpm(self, original: float):
+        """원곡 BPM 과 목표 BPM 칸 갱신 (0 = 모름)."""
+        self._bpm_sync = True
+        try:
+            self.bpm_original = float(original)
+            self.bpm_orig.setValue(self.bpm_original)
+            known = self.bpm_original > 0
+            self.bpm_target.setEnabled(known)
+            self.bpm_half.setEnabled(known)
+            self.bpm_double.setEnabled(known)
+            self.bpm_target.setValue(tempo.target_bpm(self.bpm_original, self.tempo_target) if known else 0.0)
+        finally:
+            self._bpm_sync = False
+
+    def _on_bpm_original(self, v: float):
+        if not self._bpm_sync:
+            self._show_bpm(v)
+
+    def _on_bpm_target(self):
+        if self._bpm_sync or self.bpm_original <= 0:
+            return
+        p = tempo.percent_for(self.bpm_original, self.bpm_target.value(), pitch.TEMPO_MIN, pitch.TEMPO_MAX)
+        if p is None:
+            lo = tempo.target_bpm(self.bpm_original, pitch.TEMPO_MIN)
+            hi = tempo.target_bpm(self.bpm_original, pitch.TEMPO_MAX)
+            self.set_status(f"이 곡은 {lo:.0f} ~ {hi:.0f} BPM 사이로만 바꿀 수 있습니다 "
+                            f"({pitch.TEMPO_MIN}~{pitch.TEMPO_MAX}%).", "error")
+            self._show_bpm(self.bpm_original)
+            return
+        self.tempo_slider.setValue(p)
+        self._show_bpm(self.bpm_original)
+
+    def _start_bpm(self, la):
+        if self.bpm_thread is not None:
+            try:
+                self.bpm_thread.done.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+        self._show_bpm(0.0)
+        self.bpm_orig.setSpecialValueText("분석 중…")
+        t = BpmThread(la.mix_path, self)
+        t.done.connect(self._on_bpm_done)
+        t.finished.connect(t.deleteLater)
+        self.bpm_thread = t
+        t.start()
+
+    def _on_bpm_done(self, path: str, est):
+        if self.loaded is None or str(self.loaded.mix_path) != path:
+            return
+        self.bpm_thread = None
+        self.bpm_orig.setSpecialValueText("모름")
+        self._show_bpm(est.bpm if est.reliable else 0.0)
 
     def choose_output_dir(self):
         d = QFileDialog.getExistingDirectory(self, "저장 폴더 선택", str(self.output_dir))
@@ -2274,6 +2457,11 @@ class MainWindow(QMainWindow):
         if self.harmony_thread is not None:
             self.harmony_thread.cancel()
             self.harmony_thread.wait(30000)
+        try:
+            if self.bpm_thread is not None and self.bpm_thread.isRunning():
+                self.bpm_thread.wait(15000)
+        except RuntimeError:          # 이미 끝나 정리된 스레드
+            pass
         for t in (self.update_check_thread, self.update_dl_thread):
             if t is not None and t.isRunning():
                 t.wait(10000)
