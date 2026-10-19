@@ -622,11 +622,16 @@ class MainWindow(QMainWindow):
         brow.setSpacing(6)
         brow.addWidget(label("원곡", "faint"))
         brow.addSpacing(2)
-        self.bpm_orig = QLabel("모름")
-        self.bpm_orig.setObjectName("BpmValue")
-        self.bpm_orig.setToolTip("원곡 BPM (곡을 불러올 때 자동으로 추정한 참고값)")
-        self.bpm_orig.setStyleSheet(f"QLabel#BpmValue {{ background: {theme.SURFACE_2}; border: 1px solid {theme.BORDER}; "
-                                    f"border-radius: 8px; padding: 6px 10px; color: {theme.TEXT_DIM}; }}")
+        self.bpm_orig = QDoubleSpinBox()
+        self.bpm_orig.setRange(0.0, 400.0)
+        self.bpm_orig.setDecimals(1)
+        self.bpm_orig.setSingleStep(1.0)
+        self.bpm_orig.setSpecialValueText("모름")
+        self.bpm_orig.setSuffix(" BPM")
+        self.bpm_orig.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+        self.bpm_orig.setToolTip("원곡 BPM (곡을 불러올 때 자동으로 추정한 참고값). 틀렸으면 직접 고쳐 넣으세요.\n"
+                                 "빠르기(%)는 그대로 두고 목표 BPM 표시만 다시 계산합니다.")
+        self.bpm_orig.editingFinished.connect(self._on_bpm_original)
         brow.addWidget(self.bpm_orig, 1)
         brow.addSpacing(110)                 # 아래 줄의 [절반][2배] 자리만큼 비워 칸 너비를 맞춤
         cl.addLayout(brow)
@@ -657,7 +662,7 @@ class MainWindow(QMainWindow):
         cl.addLayout(grow)
         self.tempo_hint = label("음높이는 그대로, 빠르기만 바뀝니다. 100% 면 처리하지 않습니다. 재생과 저장에 모두 적용됩니다. "
                                 "100% 에서 멀어질수록 소리가 조금씩 부자연스러워질 수 있어요. 원곡 BPM 은 자동으로 추정한 "
-                                "참고값이라 실제와 다를 수 있습니다.", "faint", wrap=True)
+                                "참고값이라 실제와 다를 수 있으니, 알고 있으면 직접 고쳐 넣으세요.", "faint", wrap=True)
         cl.addWidget(self.tempo_hint)
         lay.addWidget(c)
         self._show_bpm(0.0)
@@ -1640,11 +1645,17 @@ class MainWindow(QMainWindow):
         try:
             self.bpm_original = float(original)
             known = self.bpm_original > 0
-            self.bpm_orig.setText(f"{self.bpm_original:.1f} BPM" if known else ("분석 중…" if analyzing else "모름"))
+            self.bpm_orig.setSpecialValueText("분석 중…" if analyzing else "모름")
+            self.bpm_orig.setValue(self.bpm_original)
             self.bpm_target.setEnabled(known)
             self.bpm_target.setValue(tempo.target_bpm(self.bpm_original, self.tempo_target) if known else 0.0)
         finally:
             self._bpm_sync = False
+
+    def _on_bpm_original(self):
+        """원곡 BPM 을 직접 고침 → 빠르기(%)는 그대로, 목표 BPM 만 다시 계산."""
+        if not self._bpm_sync and abs(self.bpm_orig.value() - self.bpm_original) > 1e-6:
+            self._show_bpm(self.bpm_orig.value())
 
     def _scale_tempo(self, factor: float):
         """[절반] / [2배]: 지금 빠르기(목표 BPM)를 반 / 두 배로."""
