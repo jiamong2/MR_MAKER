@@ -158,7 +158,7 @@ def target_bpm(original: float, percent: int) -> float:
     return original * percent / 100.0
 
 
-def percent_for(original: float, target: float, lo: int = 70, hi: int = 130) -> Optional[int]:
+def percent_for(original: float, target: float, lo: int = 50, hi: int = 200) -> Optional[int]:
     """원곡 BPM → 목표 BPM 이 되는 템포(%) (범위 밖이면 None)."""
     if original <= 0 or target <= 0:
         return None

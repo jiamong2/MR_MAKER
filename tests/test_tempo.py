@@ -66,7 +66,8 @@ def test_bpm_follows_tempo_change():
 def test_percent_conversion():
     assert tempo.percent_for(100.0, 90.0) == 90
     assert tempo.percent_for(92.0, 83.0) == 90
-    assert tempo.percent_for(100.0, 200.0) is None and tempo.percent_for(0, 90) is None
+    assert tempo.percent_for(100.0, 200.0) == 200 and tempo.percent_for(100.0, 50.0) == 50
+    assert tempo.percent_for(100.0, 250.0) is None and tempo.percent_for(0, 90) is None
     assert tempo.target_bpm(92.0, 90) == pytest.approx(82.8)
 
 
@@ -82,13 +83,13 @@ def test_tempo_shift_length_and_pitch():
         pytest.skip("키·템포 엔진 없음")
     # Rubber Band: 음정 오차 없음 / 대체 엔진(Signalsmith)은 저음에서 수~수십 센트 오차가 알려져 있음 (pitch.py)
     tol_cents = 3.0 if pitch.find_rbshift() else 20.0
-    for tp, semi in ((0.8, 0), (1.25, 0), (0.9, 2)):
+    for tp, semi in ((0.5, 0), (2.0, 0), (0.8, 0), (1.25, 0), (0.9, 2)):
         y = pitch.shift(x, semi, SR, tempo=tp)
         assert len(y) == pitch.out_frames(len(x), tp) == int(round(len(x) / tp))
         assert abs(1200 * np.log2(f0(y) / (220 * 2 ** (semi / 12)))) < tol_cents
     assert pitch.shift(x, 0, SR, tempo=1.0) is not None and len(pitch.shift(x, 0, SR)) == len(x)
     with pytest.raises(ValueError):
-        pitch.shift(x, 0, SR, tempo=0.5)
+        pitch.shift(x, 0, SR, tempo=0.4)
     assert pitch.tempo_suffix(90) == " [Tempo 90%]" and pitch.tempo_suffix(100) == ""
 
 

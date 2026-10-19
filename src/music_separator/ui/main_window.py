@@ -622,33 +622,20 @@ class MainWindow(QMainWindow):
         brow.setSpacing(6)
         brow.addWidget(label("원곡", "faint"))
         brow.addSpacing(2)
-        self.bpm_orig = QDoubleSpinBox()
-        self.bpm_orig.setRange(0.0, 300.0)
-        self.bpm_orig.setDecimals(1)
-        self.bpm_orig.setSingleStep(1.0)
-        self.bpm_orig.setSpecialValueText("모름")
-        self.bpm_orig.setSuffix(" BPM")
-        self.bpm_orig.setToolTip("원곡 BPM (자동으로 추정한 참고값). 알고 있으면 직접 고쳐 주세요.")
-        self.bpm_orig.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
-        self.bpm_orig.valueChanged.connect(self._on_bpm_original)
-        self.bpm_half = text_button("절반", None, None, 32)
-        self.bpm_half.setFixedWidth(52)
-        self.bpm_half.setToolTip("추정값이 두 배로 잡혔을 때 (예: 120 → 60)")
-        self.bpm_half.clicked.connect(lambda: self.bpm_orig.setValue(self.bpm_orig.value() / 2))
-        self.bpm_double = text_button("2배", None, None, 32)
-        self.bpm_double.setFixedWidth(52)
-        self.bpm_double.setToolTip("추정값이 절반으로 잡혔을 때 (예: 60 → 120)")
-        self.bpm_double.clicked.connect(lambda: self.bpm_orig.setValue(min(300.0, self.bpm_orig.value() * 2)))
+        self.bpm_orig = QLabel("모름")
+        self.bpm_orig.setObjectName("BpmValue")
+        self.bpm_orig.setToolTip("원곡 BPM (곡을 불러올 때 자동으로 추정한 참고값)")
+        self.bpm_orig.setStyleSheet(f"QLabel#BpmValue {{ background: {theme.SURFACE_2}; border: 1px solid {theme.BORDER}; "
+                                    f"border-radius: 8px; padding: 6px 10px; color: {theme.TEXT_DIM}; }}")
         brow.addWidget(self.bpm_orig, 1)
-        brow.addWidget(self.bpm_half)
-        brow.addWidget(self.bpm_double)
+        brow.addSpacing(110)                 # 아래 줄의 [절반][2배] 자리만큼 비워 칸 너비를 맞춤
         cl.addLayout(brow)
         grow = QHBoxLayout()
         grow.setSpacing(6)
         grow.addWidget(label("목표", "faint"))
         grow.addSpacing(2)
         self.bpm_target = QDoubleSpinBox()
-        self.bpm_target.setRange(0.0, 400.0)
+        self.bpm_target.setRange(0.0, 999.0)
         self.bpm_target.setDecimals(1)
         self.bpm_target.setSingleStep(1.0)
         self.bpm_target.setSpecialValueText("—")
@@ -656,12 +643,21 @@ class MainWindow(QMainWindow):
         self.bpm_target.setToolTip("원하는 BPM 을 넣고 Enter 를 누르면 빠르기(%)로 바꿔 적용합니다.")
         self.bpm_target.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
         self.bpm_target.editingFinished.connect(self._on_bpm_target)
+        self.bpm_half = text_button("절반", None, None, 32)
+        self.bpm_half.setFixedWidth(52)
+        self.bpm_half.setToolTip("지금 빠르기의 절반으로 (예: 100% → 50%)")
+        self.bpm_half.clicked.connect(lambda: self._scale_tempo(0.5))
+        self.bpm_double = text_button("2배", None, None, 32)
+        self.bpm_double.setFixedWidth(52)
+        self.bpm_double.setToolTip("지금 빠르기의 두 배로 (예: 100% → 200%)")
+        self.bpm_double.clicked.connect(lambda: self._scale_tempo(2.0))
         grow.addWidget(self.bpm_target, 1)
-        grow.addSpacing(110)                 # 위 줄의 [절반][2배] 자리만큼 비워 칸 너비를 맞춤
+        grow.addWidget(self.bpm_half)
+        grow.addWidget(self.bpm_double)
         cl.addLayout(grow)
         self.tempo_hint = label("음높이는 그대로, 빠르기만 바뀝니다. 100% 면 처리하지 않습니다. 재생과 저장에 모두 적용됩니다. "
-                                "원곡 BPM 은 자동으로 추정한 참고값이라 틀릴 수 있어요 — 알고 있으면 직접 고쳐 주세요.",
-                                "faint", wrap=True)
+                                "100% 에서 멀어질수록 소리가 조금씩 부자연스러워질 수 있어요. 원곡 BPM 은 자동으로 추정한 "
+                                "참고값이라 실제와 다를 수 있습니다.", "faint", wrap=True)
         cl.addWidget(self.tempo_hint)
         lay.addWidget(c)
         self._show_bpm(0.0)
@@ -1638,23 +1634,26 @@ class MainWindow(QMainWindow):
         self.tempo_value.setText("100%")
         self.tempo_value.setStyleSheet("")
 
-    def _show_bpm(self, original: float):
-        """원곡 BPM 과 목표 BPM 칸 갱신 (0 = 모름)."""
+    def _show_bpm(self, original: float, analyzing: bool = False):
+        """원곡 BPM(고정 표시)과 목표 BPM 칸 갱신 (0 = 모름)."""
         self._bpm_sync = True
         try:
             self.bpm_original = float(original)
-            self.bpm_orig.setValue(self.bpm_original)
             known = self.bpm_original > 0
+            self.bpm_orig.setText(f"{self.bpm_original:.1f} BPM" if known else ("분석 중…" if analyzing else "모름"))
             self.bpm_target.setEnabled(known)
-            self.bpm_half.setEnabled(known)
-            self.bpm_double.setEnabled(known)
             self.bpm_target.setValue(tempo.target_bpm(self.bpm_original, self.tempo_target) if known else 0.0)
         finally:
             self._bpm_sync = False
 
-    def _on_bpm_original(self, v: float):
-        if not self._bpm_sync:
-            self._show_bpm(v)
+    def _scale_tempo(self, factor: float):
+        """[절반] / [2배]: 지금 빠르기(목표 BPM)를 반 / 두 배로."""
+        p = int(round(self.tempo_target * factor))
+        if not pitch.TEMPO_MIN <= p <= pitch.TEMPO_MAX:
+            self.set_status(f"빠르기는 {pitch.TEMPO_MIN}% ~ {pitch.TEMPO_MAX}% 사이로만 바꿀 수 있습니다 "
+                            f"(지금 {self.tempo_target}% → {p}%).", "error")
+            return
+        self.tempo_slider.setValue(p)
 
     def _on_bpm_target(self):
         if self._bpm_sync or self.bpm_original <= 0:
@@ -1676,8 +1675,7 @@ class MainWindow(QMainWindow):
                 self.bpm_thread.done.disconnect()
             except (RuntimeError, TypeError):
                 pass
-        self._show_bpm(0.0)
-        self.bpm_orig.setSpecialValueText("분석 중…")
+        self._show_bpm(0.0, analyzing=True)
         t = BpmThread(la.mix_path, self)
         t.done.connect(self._on_bpm_done)
         t.finished.connect(t.deleteLater)
@@ -1688,7 +1686,6 @@ class MainWindow(QMainWindow):
         if self.loaded is None or str(self.loaded.mix_path) != path:
             return
         self.bpm_thread = None
-        self.bpm_orig.setSpecialValueText("모름")
         self._show_bpm(est.bpm if est.reliable else 0.0)
 
     def choose_output_dir(self):
