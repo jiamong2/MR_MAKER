@@ -26,6 +26,8 @@ AI 처리는 모두 내 컴퓨터에서 하고, 음원이 외부 서버로 전�
 - 키·템포 조절, YouTube 입력, 트랙별 저장은 MR MAKER 와 같음. 두 프로그램은 함께 설치할 수 있고 AI 모델을 같이 씀
 - 사용 방법: [MR SEPARATOR 사용 설명서 (PDF)](docs/MR_SEPARATOR_사용설명서.pdf)
 - 소스 실행: `python run_separator.py` · 빌드: `python scripts/build.py --edition separator`
+- 버전·릴리스는 MR MAKER 와 따로: 태그 `separator-v1.0.0` …, main 커밋 메시지 `[release separator]` 로 릴리스
+  (MR MAKER 는 지금처럼 `[release]` → 태그 `v…`, GitHub '최신 릴리스')
 
 ![MR SEPARATOR](docs/screenshot-separator.png)
 

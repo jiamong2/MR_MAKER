@@ -43,7 +43,8 @@ def test_updater_picks_own_edition_files():
     code = '''
 import json
 from music_separator import updater
-def rel(names): return {"tag_name": "v99.0.0", "html_url": "u", "assets": [
+from music_separator import RELEASE_TAG_PREFIX
+def rel(names, tag=None): return {"tag_name": tag or RELEASE_TAG_PREFIX + "99.0.0", "html_url": "u", "assets": [
     {"name": n, "browser_download_url": "https://x/" + n, "size": 1} for n in names]}
 both = ["MRMaker-99.0.0-windows-x64-cpu-setup.exe", "MRMaker-99.0.0-windows-x64-cpu.msi",
         "MRSeparator-99.0.0-windows-x64-cpu-setup.exe", "MRSeparator-99.0.0-windows-x64-cpu.msi",
@@ -90,3 +91,29 @@ def test_separator_listen_and_mix_export(tmp_path):
 def test_maker_edition_unchanged(tmp_path):
     """MR MAKER 는 그대로: 홈 화면으로 시작, 2-Stem 트랙, 믹스 카드 없음."""
     _ui(tmp_path, "maker")
+
+
+def test_versions_and_release_tags_are_separate():
+    code = ("import json, music_separator as m; print(json.dumps([m.__version__, m.RELEASE_TAG_PREFIX, "
+            "m.MAKER_VERSION, m.SEPARATOR_VERSION]))")
+    mk = json.loads(_py(code, "maker"))
+    sp = json.loads(_py(code, "separator"))
+    assert mk[0] == mk[2] and mk[1] == "v"
+    assert sp[0] == sp[3] and sp[1] == "separator-v"
+
+
+def test_updater_follows_own_release_line():
+    code = '''
+import json
+from music_separator import updater
+def r(tag, draft=False, pre=False): return {"tag_name": tag, "draft": draft, "prerelease": pre, "assets": []}
+lst = [r("v9.9.9"), r("separator-v1.2.0"), r("separator-v1.10.0"), r("separator-v2.0.0", draft=True),
+       r("separator-v3.0.0", pre=True), r("separator-vX"), r("v1.0.0")]
+p = updater.pick_release(lst)
+print(json.dumps([p and p["tag_name"], updater.release_version(r("v1.4.0")),
+                  updater.release_version(r("separator-v1.0.0"))]))
+'''
+    mk = json.loads(_py(code, "maker"))
+    sp = json.loads(_py(code, "separator"))
+    assert mk == ["v9.9.9", "1.4.0", ""]                         # MR MAKER 는 separator-v 태그를 무시
+    assert sp == ["separator-v1.10.0", "", "1.0.0"]              # 숫자 비교, 초안·사전 릴리스 제외

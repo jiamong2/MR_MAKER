@@ -1,5 +1,8 @@
 # MR MAKER / MR SEPARATOR for ui.clover - Windows / macOS 자동 빌드 + 실제 실행 테스트
 # 같은 코드로 두 프로그램(에디션)을 만든다: maker = MR MAKER (2-Stem), separator = MR SEPARATOR (6-Stem)
+# 릴리스는 프로그램마다 따로 한다 (버전도 따로):
+#   main 커밋 메시지에 [release]           → MR MAKER 만 빌드해 태그 v<MAKER_VERSION> 으로 릴리스 (GitHub '최신 릴리스')
+#   main 커밋 메시지에 [release separator] → MR SEPARATOR 만 빌드해 태그 separator-v<SEPARATOR_VERSION> 으로 릴리스
 #
 # 실행 방법
 #   - main 브랜치에 push 또는 Pull Request → 테스트 + 빌드
@@ -176,7 +179,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     name: build (${{ matrix.exe }} ${{ matrix.name }})
     env:
-      SKIP: ${{ (matrix.variant == 'cuda' && github.event_name == 'workflow_dispatch' && !inputs.build_cuda) || (matrix.variant == 'cuda' && github.event_name == 'pull_request') || (matrix.variant == 'x86_64' && github.event_name == 'workflow_dispatch' && !inputs.build_intel_mac) || (github.event_name == 'workflow_dispatch' && inputs.edition != 'both' && inputs.edition != matrix.edition) }}
+      SKIP: ${{ (matrix.variant == 'cuda' && github.event_name == 'workflow_dispatch' && !inputs.build_cuda) || (matrix.variant == 'cuda' && github.event_name == 'pull_request') || (matrix.variant == 'x86_64' && github.event_name == 'workflow_dispatch' && !inputs.build_intel_mac) || (github.event_name == 'workflow_dispatch' && inputs.edition != 'both' && inputs.edition != matrix.edition) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[release separator]') && matrix.edition != 'separator') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[release]') && matrix.edition != 'maker') }}
       MS_VARIANT: ${{ matrix.variant }}
       MS_EDITION: ${{ matrix.edition }}
       EXE: ${{ matrix.exe }}
@@ -375,31 +378,47 @@ jobs:
 
   # ---------------------------------------------------- 태그 push 시 릴리스
   release:
-    # v* 태그 push, 또는 main 커밋 메시지에 [release] 가 있으면 현재 버전으로 릴리스 생성
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[release]'))
+    # main 커밋 메시지의 [release] (MR MAKER) / [release separator] (MR SEPARATOR) — 한 번에 한 프로그램만
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[release]') || contains(github.event.head_commit.message, '[release separator]'))
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
-      - name: Version
+      - name: Which program / version
         id: ver
-        run: echo "tag=v$(python3 -c "import re;print(re.search(r'__version__ = \"([^\"]+)\"', open('src/music_separator/__init__.py').read()).group(1))")" >> "$GITHUB_OUTPUT"
+        run: |
+          if printf '%s' "$MSG" | grep -qF '[release separator]'; then ED=separator; else ED=maker; fi
+          eval "$(MUSIC_SEPARATOR_EDITION=$ED python3 -c "
+          import sys; sys.path.insert(0, 'src'); import music_separator as m
+          print(f'VER={m.__version__}'); print(f'TAG={m.RELEASE_TAG_PREFIX}{m.__version__}')
+          print(f'EXE={m.EXE_NAME}'); print(f\"NAME='{m.APP_NAME}'\")")"
+          if [ "$ED" = separator ]; then NOTES=packaging/RELEASE_NOTES_SEPARATOR.md; LATEST=false; else NOTES=packaging/RELEASE_NOTES.md; LATEST=true; fi
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::$TAG 릴리스가 이미 있습니다. 버전을 올린 뒤 다시 릴리스하세요."; exit 1
+          fi
+          { echo "edition=$ED"; echo "tag=$TAG"; echo "exe=$EXE"; echo "name=$NAME v$VER"; echo "notes=$NOTES"; echo "latest=$LATEST"; } >> "$GITHUB_OUTPUT"
+          echo "release $NAME $TAG ($EXE-*, notes $NOTES, latest=$LATEST)"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MSG: ${{ github.event.head_commit.message }}
       - uses: actions/download-artifact@v8
         with:
-          pattern: MR*-*
+          pattern: ${{ steps.ver.outputs.exe }}-*
           path: release
           merge-multiple: true
       - name: Drop files over the 2GB release asset limit
         run: |
           find release -type f -size +2000M -print -delete
           ls -la release
+          if ls release | grep -v "^${{ steps.ver.outputs.exe }}-"; then echo "::error::다른 프로그램의 파일이 섞여 있습니다"; exit 1; fi
       - uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || steps.ver.outputs.tag }}
+          tag_name: ${{ steps.ver.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: MR MAKER · MR SEPARATOR for ui.clover ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || steps.ver.outputs.tag }}
-          body_path: packaging/RELEASE_NOTES.md
+          name: ${{ steps.ver.outputs.name }}
+          body_path: ${{ steps.ver.outputs.notes }}
           files: release/*
           draft: false
+          make_latest: ${{ steps.ver.outputs.latest }}

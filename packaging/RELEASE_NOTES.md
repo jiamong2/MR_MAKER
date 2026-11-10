@@ -1,30 +1,14 @@
-## MR MAKER · MR SEPARATOR for ui.clover
+## MR MAKER for ui.clover
 
-이 릴리스에는 두 프로그램의 설치 파일이 함께 들어 있습니다. 필요한 것만 받으면 되고, 둘 다 설치해도 됩니다 (내려받은 AI 모델은 함께 씁니다).
+음원 파일이나 YouTube 주소 하나로 **보컬** 또는 **반주(MR)** 를 추출하고, 키(−12 ~ +12)를 바꿔 저장하는 프로그램입니다.
 
-| 프로그램 | 이런 분께 | 파일 이름 |
-|---|---|---|
-| **MR MAKER** | 노래 연습용 반주(MR)·보컬이 필요한 분. 버튼 한 번으로 **보컬 / 반주** 추출, 키·템포 조절 | `MRMaker-…` |
-| **MR SEPARATOR** | 악기를 연주하거나 카피·편곡을 하는 분. **보컬·드럼·베이스·기타·피아노·나머지 악기** 6개 트랙으로 나눠 골라 듣고 원하는 조합으로 저장 | `MRSeparator-…` |
-
-### 설치 파일 선택 (`MRMaker` 또는 `MRSeparator` 로 시작하는 파일 중에서)
+### 설치 파일 선택
 | 컴퓨터 | 파일 |
 |---|---|
-| Windows, NVIDIA 그래픽카드(RTX 20·GTX 16 시리즈 이상) | `…-windows-x64-cuda.msi` + 같은 이름으로 시작하는 `.cab` 파일들을 같은 폴더에 받은 뒤 .msi 실행 |
-| Windows, 그 외 | `…-windows-x64-cpu.msi` (권장) 또는 `…-windows-x64-cpu-setup.exe` |
-| Mac (M1~M4, Apple Silicon) | `…-macos-arm64.dmg` |
-| Mac (Intel) | `…-macos-x86_64.dmg` |
-
-MR SEPARATOR 는 계산량이 많아 그래픽카드가 없는 PC(CPU 버전)에서는 4분 곡에 15~40분 정도 걸릴 수 있습니다. 사용 방법은 [MR SEPARATOR 사용 설명서](https://github.com/jiamong2/MR_MAKER/blob/main/docs/MR_SEPARATOR_사용설명서.pdf)를 참고하세요.
-
-### v1.4.0 변경 사항
-- **새 프로그램 MR SEPARATOR for ui.clover (6-Stem)**
-  - 곡을 열고 [AI 분리 시작] 을 누르면 보컬·드럼·베이스·기타·피아노·나머지 악기 6개 트랙으로 나눕니다. 여섯 트랙을 모두 더하면 원곡과 정확히 같습니다.
-  - 기본 모델은 BS-RoFormer SW 입니다. 내려받아 쓸 수 있는 모델 가운데 피아노 분리 점수가 가장 높습니다 (MVSEP 피아노 SDR 7.80dB).
-  - **골라 듣기**: 트랙의 S(솔로)로 한 악기만, M(음소거)이나 [○○ 빼기] 버튼으로 한 악기만 빼고 듣습니다. 트랙마다 볼륨(0~150%)을 바꿀 수 있습니다.
-  - **지금 들리는 대로 저장**: 켜져 있는 트랙을 지금 볼륨 그대로 섞어 파일 하나로 저장합니다 (예: `믹스 (피아노 제외)`). 트랙별 저장도 됩니다.
-  - 키(−12 ~ +12)·템포(50 ~ 200%) 조절, YouTube 입력, 화음 따기(실험)는 MR MAKER 와 같습니다.
-- MR MAKER 는 기능 변화가 없습니다 (v1.3.9 와 같음).
+| Windows, NVIDIA 그래픽카드(RTX 20·GTX 16 시리즈 이상) | `MRMaker-…-windows-x64-cuda.msi` + 같은 이름으로 시작하는 `.cab` 파일들을 같은 폴더에 받은 뒤 .msi 실행 |
+| Windows, 그 외 | `MRMaker-…-windows-x64-cpu.msi` (권장) 또는 `MRMaker-…-windows-x64-cpu-setup.exe` |
+| Mac (M1~M4, Apple Silicon) | `MRMaker-…-macos-arm64.dmg` |
+| Mac (Intel) | `MRMaker-…-macos-x86_64.dmg` |
 
 ### v1.3.9 변경 사항
 - 원곡 BPM 을 다시 직접 고칠 수 있게 했습니다 (자동 추정이 틀렸을 때). 고쳐도 빠르기(%)는 그대로이고 목표 BPM 표시만 다시 계산합니다. 그 밖의 템포 기능은 v1.3.8 과 같습니다.

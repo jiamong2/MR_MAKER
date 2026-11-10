@@ -18,13 +18,41 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import APP_SHORT, EXE_NAME, __version__
+from . import APP_SHORT, EXE_NAME, RELEASE_TAG_PREFIX, SEPARATOR, __version__
 
 log = logging.getLogger(__name__)
 
 REPO = "jiamong2/MR_MAKER"
 API_LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
-RELEASES_PAGE = f"https://github.com/{REPO}/releases/latest"
+API_LIST = f"https://api.github.com/repos/{REPO}/releases?per_page=30"
+# MR MAKER 는 '최신 릴리스'(태그 v…), MR SEPARATOR 는 태그가 separator-v… 인 릴리스 가운데 가장 새 것을 본다.
+# (이미 설치된 MR MAKER 1.3.x 는 '최신 릴리스'만 보므로 MR SEPARATOR 릴리스는 최신으로 표시하지 않는다)
+RELEASES_PAGE = (f"https://github.com/{REPO}/releases" if SEPARATOR
+                 else f"https://github.com/{REPO}/releases/latest")
+
+
+def release_version(release: dict) -> str:
+    """릴리스 태그에서 이 프로그램의 버전을 꺼냄. 다른 프로그램의 태그면 빈 문자열."""
+    tag = str(release.get("tag_name", ""))
+    if not tag.startswith(RELEASE_TAG_PREFIX):
+        return ""
+    ver = tag[len(RELEASE_TAG_PREFIX):]
+    return ver if re.fullmatch(r"\d+(\.\d+)*", ver) else ""
+
+
+def pick_release(releases: list) -> Optional[dict]:
+    """릴리스 목록에서 이 프로그램의 가장 새 정식 릴리스."""
+    best, best_v = None, None
+    for r in releases:
+        if r.get("draft") or r.get("prerelease"):
+            continue
+        v = release_version(r)
+        if not v:
+            continue
+        key = tuple(int(x) for x in v.split("."))
+        if best_v is None or key > best_v:
+            best, best_v = r, key
+    return best
 
 
 @dataclass
@@ -96,7 +124,7 @@ def pick_assets(release: dict, version: str, variant: str, msi: bool = False) ->
 def parse_release(release: dict, variant: str, auto: bool, msi: bool = False) -> Optional[UpdateInfo]:
     if release.get("draft") or release.get("prerelease"):
         return None
-    ver = str(release.get("tag_name", "")).lstrip("vV")
+    ver = release_version(release)
     if not ver or not is_newer(ver):
         return None
     # 한 릴리스에 두 프로그램(MR MAKER / MR SEPARATOR)의 파일이 함께 올라간다. 이 프로그램의 파일이 없는
@@ -120,8 +148,14 @@ def check(timeout: float = 8.0) -> Optional[UpdateInfo]:
     """새 버전이 있으면 UpdateInfo, 없으면 None. 네트워크 오류는 예외."""
     from .engine import build_variant
 
-    with _urlopen(API_LATEST, timeout) as r:
-        release = json.loads(r.read().decode("utf-8"))
+    if SEPARATOR:
+        with _urlopen(API_LIST, timeout) as r:
+            release = pick_release(json.loads(r.read().decode("utf-8")))
+        if release is None:
+            return None
+    else:
+        with _urlopen(API_LATEST, timeout) as r:
+            release = json.loads(r.read().decode("utf-8"))
     msi = installed_msi()
     return parse_release(release, build_variant(), installed_windows() or msi, msi)
 
