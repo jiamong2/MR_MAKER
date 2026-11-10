@@ -82,10 +82,10 @@ def _ui(tmp_path, edition: str) -> str:
     return r.stdout
 
 
-def test_separator_listen_and_mix_export(tmp_path):
-    """칩 ↔ 음소거 동기화, 솔로·볼륨이 반영된 '지금 들리는 대로 저장', 저장된 소리 = 켜진 트랙의 합."""
+def test_separator_layout_and_export(tmp_path):
+    """왼쪽 카드 순서(곡 불러오기 · 키 · 템포 · AI 분리), 음소거 → 모두 켜기, 6개 트랙 저장."""
     out = _ui(tmp_path, "separator")
-    assert "믹스 (피아노 제외)" in out and "믹스 (피아노만)" in out and "믹스 (드럼+베이스, 볼륨 조절)" in out
+    assert "곡 불러오기" in out
 
 
 def test_maker_edition_unchanged(tmp_path):

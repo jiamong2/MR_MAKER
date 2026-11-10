@@ -201,29 +201,17 @@ class GuiSmoke:
         elif self.step == "sep_run":
             if w.result is None or [s.key for s in w.result.stems] != want:
                 return self._finish(False, f"6-stem result missing: {w.last_error}")
-            if list(w.chips) != want or not w.mix_save_btn.isEnabled():
-                return self._finish(False, "mix chips were not built")
+            if [k for k in w.rows] != ["original", *want]:
+                return self._finish(False, f"track rows wrong: {list(w.rows)}")
             self._log(f"separated: {list(w.rows)}")
-            w.chips["piano"].click()                       # 피아노 빼기 → 트랙 음소거와 동기화
-            if not w.mixer.track("piano").mute or w._mix_plan()[1] != ["piano"]:
-                return self._finish(False, f"chip did not mute the track: {w._mix_plan()}")
+            w.rows["piano"].set_muted(True)                # 피아노만 빼고 듣기
             w.mixer.seek(int(w.mixer.length * 0.4))
             block, _ = w.mixer.render(4096)
             self._log(f"mixer render ok, peak={float(abs(block).max()):.3f}")
             self._shot("-mix")
-            w.export_mix()
-            self.step = "sep_mix1"
-        elif self.step == "sep_mix1":
             w.reset_mix()
-            w.rows["drums"].set_solo(True)
-            w.rows["bass"].set_solo(True)
-            w.rows["bass"].slider.setValue(70)
-            if w._mix_plan() != (["drums", "bass"], ["vocals", "guitar", "piano", "other"], {"bass": 0.7}):
-                return self._finish(False, f"solo/gain mix plan wrong: {w._mix_plan()}")
-            w.export_mix()
-            self.step = "sep_mix2"
-        elif self.step == "sep_mix2":
-            w.reset_mix()
+            if any(t.mute for t in w.mixer.tracks if t.key != "original"):
+                return self._finish(False, "reset did not unmute the tracks")
             w.set_format("flac")
             w.export_all()
             self.step = "sep_all"
@@ -242,16 +230,16 @@ class GuiSmoke:
             sec = w.loaded.seconds / 0.9
             if abs(w.mixer.duration - sec) > 0.05:
                 return self._finish(False, f"tempo 90% playback length {w.mixer.duration:.2f}s != {sec:.2f}s")
-            w.rows["piano"].set_solo(True)
-            w.export_mix()
+            for k in want:                                 # 피아노 트랙만 골라 저장
+                w.rows[k].card.toggle.setChecked(k == "piano")
+            w.export_selected()
             self.step = "sep_done"
         elif self.step == "sep_done":
             files = self._outputs()
             names = [f.name for f in files]
             self._log(f"exported {len(files)} files: {names}")
-            shifted = [f for f in files if "피아노만" in f.name and "Key -3" in f.name and "Tempo 90%" in f.name]
-            ok = (sum(1 for f in files if f.suffix == ".flac") == 6 and any("믹스 (피아노 제외)" in n for n in names)
-                  and any("믹스 (드럼+베이스, 볼륨 조절)" in n for n in names) and len(shifted) == 1)
+            shifted = [f for f in files if "피아노" in f.name and "Key -3" in f.name and "Tempo 90%" in f.name]
+            ok = sum(1 for f in files if f.suffix == ".flac") == 6 and len(shifted) == 1
             if ok:
                 sec = audio_io.probe_audio(shifted[0]).duration
                 want_sec = w.loaded.seconds / 0.9

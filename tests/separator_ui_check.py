@@ -63,62 +63,35 @@ def wait():
     app.processEvents()
 out = {}
 if MODE == "6":
-    assert list(w.chips) == list(engine.MODES["6"].outputs), list(w.chips)
-    assert w.mix_save_btn.isEnabled() and "전체" in w.mix_state.text(), w.mix_state.text()
-    # 1) 칩으로 피아노 빼기 ↔ 트랙 음소거 동기화
-    w.chips["piano"].click(); app.processEvents()
-    assert w.mixer.track("piano").mute and w.rows["piano"].card.mute_btn.isChecked()
-    assert w._mix_plan()[1] == ["piano"], w._mix_plan()
-    out["state1"] = w.mix_state.text()
-    w.grab().save(str(work/"shot-piano-off.png"))
-    w.set_format("wav24"); w.export_mix(); wait()
-    # 2) 트랙 M 버튼 → 칩 반영, 솔로
-    w.rows["piano"].set_muted(False); app.processEvents()
-    assert not w.chips["piano"].isChecked()
-    w.rows["piano"].set_solo(True); app.processEvents()
-    assert w._mix_plan()[0] == ["piano"], w._mix_plan()
-    out["state2"] = w.mix_state.text()
-    w.grab().save(str(work/"shot-piano-solo.png"))
-    w.export_mix(); wait()
-    # 3) 드럼+베이스 솔로, 베이스 볼륨 70%
-    w.rows["piano"].set_solo(False); w.rows["drums"].set_solo(True); w.rows["bass"].set_solo(True)
-    w.rows["bass"].slider.setValue(70); app.processEvents()
-    out["state3"] = w.mix_state.text(); out["plan3"] = w._mix_plan()
-    w.export_mix(); wait()
-    # 4) 모두 켜기
-    w.reset_mix(); app.processEvents()
-    assert w._mix_plan() == (list(engine.MODES["6"].outputs), [], {}), w._mix_plan()
-    assert w.rows["bass"].slider.value() == 100 and w.mixer.track("original").mute
-    out["state4"] = w.mix_state.text()
-    # 5) 전부 끄면 저장 버튼 비활성
-    for k in w.chips: w.rows[k].set_muted(True)
-    app.processEvents(); assert not w.mix_save_btn.isEnabled(); out["state5"] = w.mix_state.text()
-    w.reset_mix(); app.processEvents()
-    w.export_all(); wait()
+    # 왼쪽 순서: 1 곡 불러오기 · 2 키 · 3 템포 · 4 AI 음원 분리 (화면 위에는 파일 열기/YouTube 없음)
+    left = w.findChild(type(w.track_scroll), "LeftScroll").widget().layout()
+    titles = []
+    for i in range(left.count()):
+        wd = left.itemAt(i).widget()
+        if wd is not None and wd.isVisibleTo(w):
+            from PySide6.QtWidgets import QLabel
+            titles.append([l.text() for l in wd.findChildren(QLabel) if l.objectName() in ("NumBadge",) or
+                           l.property("role") == "cardTitle"][:2])
+    out["left"] = titles
+    assert [t[0] for t in titles] == ["1", "2", "3", "4"], titles
+    assert "곡 불러오기" in titles[0][1] and "키" in titles[1][1] and "템포" in titles[2][1] and "AI 음원 분리" in titles[3][1]
+    assert w.open_btn.window() is w and w.open_btn.parentWidget() is not w.play_btn.parentWidget()
+    assert w.mixer.track("original").mute and not w.chips
     w.grab().save(str(work/"shot-main.png"))
+    # 피아노만 빼기 → 모두 켜기
+    w.rows["piano"].set_muted(True); app.processEvents()
+    assert w.mixer.track("piano").mute
+    w.reset_mix(); app.processEvents()
+    assert not any(t.mute for t in w.mixer.tracks if t.key != "original") and w.mixer.track("original").mute
+    w.set_format("wav24"); w.export_all(); wait()
     files = sorted((work/"out").rglob("*.wav"))
     out["files"] = [f.name for f in files]
-    # 수치 확인: 믹스 파일 = 해당 트랙 합
-    import wave
-    def load(f):
-        with wave.open(str(f)) as wv:
-            b = wv.readframes(wv.getnframes()); sw = wv.getsampwidth(); ch = wv.getnchannels()
-        a = np.frombuffer(b, dtype=np.uint8).reshape(-1, sw)
-        v = (a[:, 0].astype(np.int32) | (a[:, 1].astype(np.int32) << 8) | (a[:, 2].astype(np.int8).astype(np.int32) << 16))
-        return (v / 8388608.0).reshape(-1, ch).astype(np.float32)
-    def err(name, want):
-        f = [x for x in files if name in x.name][0]; a = load(f); m = min(len(a), len(want))
-        g = float((a[:m] * want[:m]).sum() / (want[:m] ** 2).sum())      # 클리핑 방지 배율 허용
-        out["gain_" + name] = round(g, 4)
-        return float(np.abs(a[:m] - g * want[:m]).max())
-    out["err_no_piano"] = err("피아노 제외", mix - stems["piano"])
-    out["err_piano_only"] = err("믹스 (피아노만)", stems["piano"])
-    out["err_drum_bass"] = err("드럼+베이스", stems["drums"] + 0.7 * stems["bass"])
-    assert max(out["err_no_piano"], out["err_piano_only"], out["err_drum_bass"]) < 1e-4, out
+    assert len(files) == 6, out["files"]
+    assert "Blue Night" in w.source_lbl.text()
     assert not w.home_btn.isVisible() and w.pages.currentIndex() == 1
     assert "홈 화면" not in [a.text() for a in w._menu.actions()]
 else:
-    assert w.pages.currentIndex() == 0 and w.mix_save_btn is None
+    assert w.pages.currentIndex() == 0 and w.open_btn.parentWidget() is w.play_btn.parentWidget()
     w.show_advanced(); app.processEvents()
     assert w.home_btn.isVisible() and list(w.rows) == ["original", "vocals", "instrumental"]
     w.grab().save(str(work/"shot-maker.png"))

@@ -59,6 +59,6 @@ DATA_DIR_NAME = "Music Separator"      # macOS ~/Library/Application Support/<�
 #   MR MAKER     : 태그 v<버전>            (GitHub '최신 릴리스' = MR MAKER)
 #   MR SEPARATOR : 태그 separator-v<버전>  ('최신 릴리스'로 표시하지 않음)
 MAKER_VERSION = "1.3.9"
-SEPARATOR_VERSION = "1.0.0"
+SEPARATOR_VERSION = "1.0.1"
 __version__ = SEPARATOR_VERSION if SEPARATOR else MAKER_VERSION
 RELEASE_TAG_PREFIX = "separator-v" if SEPARATOR else "v"

@@ -396,11 +396,12 @@ class MainWindow(QMainWindow):
         self.open_btn = text_button("파일 열기", "folder-fill", None, 46, theme.TEXT_DIM)
         self.open_btn.setMinimumWidth(124)
         self.open_btn.clicked.connect(self.browse_file)
-        lay.addWidget(self.open_btn)
         self.yt_btn = text_button("YouTube", "link", None, 46, theme.TEXT_DIM)
         self.yt_btn.setToolTip("YouTube 영상 주소로 오디오 불러오기")
         self.yt_btn.clicked.connect(self.open_youtube)
-        lay.addWidget(self.yt_btn)
+        if not SEPARATOR:                  # MR SEPARATOR 는 왼쪽 '1 곡 불러오기' 카드에 둠
+            lay.addWidget(self.open_btn)
+            lay.addWidget(self.yt_btn)
         self.more_btn = icon_button("dots", "메뉴", 46, 20)
         lay.addWidget(self.more_btn)
         return bar
@@ -417,10 +418,14 @@ class MainWindow(QMainWindow):
         lay = QVBoxLayout(panel)
         lay.setContentsMargins(0, 0, 12, 0)
         lay.setSpacing(16)
+        # MR SEPARATOR 순서: 1 곡 불러오기 · 2 키 · 3 템포 · 4 AI 음원 분리 / MR MAKER: 1 분리 · 2 MR 저장 · 3 키 · 4 템포
+        cards: dict[str, QWidget] = {}
+        if SEPARATOR:
+            cards["source"] = self._build_source_card()
 
         # ---- 1. 분리 ----
         if SEPARATOR:
-            c, cl = card("1", "AI 음원 분리 · 6-Stem", "VOCALS / DRUMS / BASS / GUITAR / PIANO / OTHER")
+            c, cl = card("4", "AI 음원 분리 · 6-Stem", "VOCALS / DRUMS / BASS / GUITAR / PIANO / OTHER")
         else:
             c, cl = card("1", "AI 음원 분리 · 2-Stem", "VOCALS / INSTRUMENTAL")
         info = QFrame()
@@ -502,7 +507,7 @@ class MainWindow(QMainWindow):
                                       " padding:8px 10px; color:#9a5a12; font-size:12px;")
         self.notice_lbl.hide()
         cl.addWidget(self.notice_lbl)
-        lay.addWidget(c)
+        cards["sep"] = c
 
         # ---- 2. MR / 보컬 저장 ----
         c, cl = card("2", "MR(반주) · 보컬 저장", "EXPORT")
@@ -542,14 +547,11 @@ class MainWindow(QMainWindow):
         self.vocal_save_btn = text_button("보컬만 저장", "mic", None, 42, theme.TEXT_DIM)
         self.vocal_save_btn.clicked.connect(self.export_vocals)
         cl.addWidget(self.vocal_save_btn)
-        lay.addWidget(c)
-        c.setVisible(not SEPARATOR)
-        self.mix_save_btn: Optional[QPushButton] = None
-        if SEPARATOR:
-            lay.addWidget(self._build_mix_card())
+        cards["mr"] = c
+        c.setVisible(not SEPARATOR)        # MR SEPARATOR 는 트랙 화면에서 골라 듣고 저장 (위젯은 남겨 둠)
 
         # ---- 3. 키 조절 ----
-        c, cl = card("3", "키 조절", "KEY")
+        c, cl = card("2" if SEPARATOR else "3", "키 조절", "KEY")
         krow = QHBoxLayout()
         krow.setSpacing(10)
         self.key_down = text_button("−", None, "step", 44)
@@ -598,10 +600,10 @@ class MainWindow(QMainWindow):
         self.key_timer.setSingleShot(True)
         self.key_timer.setInterval(450)       # 슬라이더를 움직이는 동안은 기다렸다가 처리
         self.key_timer.timeout.connect(self._apply_key)
-        lay.addWidget(c)
+        cards["key"] = c
 
         # ---- 4. 템포 조절 ----
-        c, cl = card("4", "템포 조절", "TEMPO")
+        c, cl = card("3" if SEPARATOR else "4", "템포 조절", "TEMPO")
         trow = QHBoxLayout()
         trow.setSpacing(10)
         self.tempo_down = text_button("−", None, "step", 44)
@@ -691,41 +693,26 @@ class MainWindow(QMainWindow):
                                 "100% 에서 멀어질수록 소리가 조금씩 부자연스러워질 수 있어요. 원곡 BPM 은 자동으로 추정한 "
                                 "참고값이라 실제와 다를 수 있으니, 알고 있으면 직접 고쳐 넣으세요.", "faint", wrap=True)
         cl.addWidget(self.tempo_hint)
-        lay.addWidget(c)
+        cards["tempo"] = c
+        order = ("source", "key", "tempo", "sep", "mr") if SEPARATOR else ("sep", "mr", "key", "tempo")
+        for k in order:
+            lay.addWidget(cards[k])
         self._show_bpm(0.0)
         lay.addStretch(1)
         scroll.setWidget(panel)
         return scroll
 
-    def _build_mix_card(self) -> QWidget:
-        """MR SEPARATOR: 듣고 싶은 조합 만들기 + 지금 들리는 대로 저장."""
-        c, cl = card("2", "골라 듣기 · 믹스 저장", "LISTEN / MIX")
-        cl.addWidget(label("빼고 싶은 악기를 누르면 그 트랙이 꺼집니다 (트랙의 M 버튼과 같아요). 한 악기만 듣고 싶으면 "
-                           "오른쪽 트랙의 S(솔로) 버튼을 누르세요.", "dim", wrap=True))
-        self.mix_chip_box = QWidget()
-        self.mix_chip_grid = QGridLayout(self.mix_chip_box)
-        self.mix_chip_grid.setContentsMargins(0, 0, 0, 0)
-        self.mix_chip_grid.setSpacing(8)
-        cl.addWidget(self.mix_chip_box)
-        self.mix_empty = label("분리를 마치면 악기 버튼이 여기에 나타납니다.", "faint", wrap=True)
-        cl.addWidget(self.mix_empty)
-        self.mix_state = label("", "sectionLabel", wrap=True)
-        cl.addWidget(self.mix_state)
+    def _build_source_card(self) -> QWidget:
+        """MR SEPARATOR: 1 곡 불러오기 (화면 위에 있던 [파일 열기] · [YouTube] 를 옮김)."""
+        c, cl = card("1", "곡 불러오기", "FILE / YOUTUBE")
+        self.source_lbl = label("음원 파일을 창에 끌어다 놓거나 아래 버튼으로 불러오세요.", "dim", wrap=True)
+        cl.addWidget(self.source_lbl)
         row = QHBoxLayout()
         row.setSpacing(10)
-        self.mix_reset_btn = text_button("모두 켜기", None, None, 46)
-        self.mix_reset_btn.setToolTip("음소거·솔로를 모두 풀고 볼륨을 100% 로 되돌립니다.")
-        self.mix_reset_btn.clicked.connect(self.reset_mix)
-        self.mix_save_btn = text_button("지금 들리는 대로 저장", "music", "primary", 46)
-        self.mix_save_btn.setToolTip("켜져 있는 트랙을 지금 볼륨 그대로 섞어 파일 하나로 저장합니다.\n"
-                                     "예: 피아노만 끄고 저장 → 피아노 없는 반주 (피아노 연습용)")
-        self.mix_save_btn.clicked.connect(self.export_mix)
-        glow(self.mix_save_btn, theme.ACCENT, 20, 60, 3)
-        row.addWidget(self.mix_reset_btn)
-        row.addWidget(self.mix_save_btn, 1)
+        self.open_btn.setMinimumWidth(0)
+        row.addWidget(self.open_btn, 1)
+        row.addWidget(self.yt_btn, 1)
         cl.addLayout(row)
-        cl.addWidget(label("트랙을 하나씩 따로 저장하려면 아래 막대의 [선택한 트랙 저장] · [전체 트랙 저장]을 쓰세요. "
-                           "키·템포를 바꿨다면 저장에도 그대로 적용됩니다.", "faint", wrap=True))
         return c
 
     def _build_tracks_panel(self) -> QWidget:
@@ -994,11 +981,6 @@ class MainWindow(QMainWindow):
         for w in (self.play_btn, self.stop_btn, self.rew_btn, self.seek):
             w.setEnabled(has_file)
         self.chip_empty.setVisible(not has_result)
-        if self.mix_save_btn is not None:
-            self.mix_empty.setVisible(not has_result)
-            self.mix_chip_box.setVisible(has_result)
-            self.mix_reset_btn.setEnabled(has_result)
-            self._update_mix_state()
         self.start_btn.setText("다시 분리" if has_result else "AI 분리 시작")
         self.home_btn.setEnabled(True)
 
@@ -1133,6 +1115,12 @@ class MainWindow(QMainWindow):
         fm = self.file_title.fontMetrics()
         rate = f" · {la.native_rate / 1000:g}kHz"
         self.file_title.setText(fm.elidedText(la.source.name, Qt.TextElideMode.ElideMiddle, 300 - fm.horizontalAdvance(rate)) + rate)
+        if SEPARATOR:
+            self.source_lbl.setText(f"{la.source.name}  ·  {audio_io.format_time(la.seconds)}\n"
+                                    "다른 곡은 창에 끌어다 놓거나 아래 버튼으로 불러오세요.")
+            # 다음 할 일([AI 분리 시작], 맨 아래 카드)이 보이도록 왼쪽 패널을 내림
+            QTimer.singleShot(0, lambda: self.findChild(QScrollArea, "LeftScroll").ensureWidgetVisible(
+                self.start_btn, 0, 60))
         self.file_title.setToolTip(str(la.source))
         self.lcd.len_lbl.setText(audio_io.format_time(la.seconds))
         self.ruler.set_duration(la.seconds)
@@ -1402,7 +1390,6 @@ class MainWindow(QMainWindow):
         t = self._track(key)
         if t:
             t.gain = g
-        self._update_mix_state()
 
     def _refresh_audible(self):
         tracks = self.mixer.tracks
@@ -1410,7 +1397,6 @@ class MainWindow(QMainWindow):
         for t, f in zip(tracks, flags):
             if t.key in self.rows:
                 self.rows[t.key].set_audible(f)
-        self._update_mix_state()
 
     def reset_mixer(self):
         for key, row in self.rows.items():
@@ -1449,75 +1435,11 @@ class MainWindow(QMainWindow):
 
     # ============================================================== MR ===
     def _build_chips(self, res: Optional[engine.SeparationResult]):
-        """MR MAKER(2-Stem)는 악기 칩 대신 [MR 저장]/[보컬만 저장] 버튼을 사용.
-        MR SEPARATOR 는 트랙마다 '빼기' 칩을 만들어 트랙의 음소거(M)와 서로 맞춘다."""
+        """악기 칩은 쓰지 않음: MR MAKER 는 [MR 저장]/[보컬만 저장], MR SEPARATOR 는 트랙 화면에서 골라 듣고 저장."""
         for b in self.chips.values():
             b.setParent(None)
             b.deleteLater()
         self.chips.clear()
-        if not SEPARATOR or res is None:
-            return
-        from .icons import STEM_ICON
-
-        for i, stem in enumerate(res.stems):
-            chip = ChipButton(f"{engine.stem_label(stem.key, res.mode)} 빼기", STEM_ICON.get(stem.key, "wave"))
-            chip.setToolTip(f"{engine.stem_label(stem.key, res.mode)} 트랙을 끕니다 (다시 누르면 켜짐)")
-            chip.clicked.connect(lambda on, k=stem.key: self._on_mix_chip(k, on))
-            self.mix_chip_grid.addWidget(chip, i // 2, i % 2)
-            self.chips[stem.key] = chip
-
-    def _on_mix_chip(self, key: str, on: bool):
-        row = self.rows.get(key)
-        if row is not None:
-            row.set_muted(on)
-        if on and "original" in self.rows:       # 원본을 같이 틀면 뺀 악기가 다시 들리므로 원본은 끔
-            self.rows["original"].set_muted(True)
-
-    def _mix_plan(self) -> tuple[list, list, dict]:
-        """지금 들리는 조합: (들리는 트랙, 꺼진 트랙, 볼륨이 100% 가 아닌 트랙의 배율). 원본(참고용) 트랙은 제외."""
-        if self.result is None:
-            return [], [], {}
-        keys = [s.key for s in self.result.stems]
-        tracks = {t.key: t for t in self.mixer.tracks}
-        solo = [k for k in keys if k in tracks and tracks[k].solo]
-        if "original" in tracks and tracks["original"].solo and not solo:
-            return list(keys), [], {}            # 원본만 솔로 = 전체가 들리는 것과 같음
-        on = [k for k in keys if k in tracks and ((k in solo) if solo else not tracks[k].mute)
-              and tracks[k].gain > 0.005]
-        off = [k for k in keys if k not in on]
-        gains = {k: round(float(tracks[k].gain), 2) for k in on if abs(tracks[k].gain - 1.0) > 0.005}
-        return on, off, gains
-
-    def _mix_name(self) -> str:
-        on, off, gains = self._mix_plan()
-        if not on:
-            return ""
-        lab = self._label
-        if not off:
-            name = "전체"
-        elif len(off) <= 2 or len(off) < len(on):
-            name = "·".join(lab(k) for k in off) + " 제외"
-        else:
-            name = "+".join(lab(k) for k in on) + ("만" if len(on) == 1 else "")
-        return name + (", 볼륨 조절" if gains else "")
-
-    def _update_mix_state(self):
-        if self.mix_save_btn is None:
-            return
-        has = self.result is not None
-        for key, chip in self.chips.items():
-            t = self._track(key)
-            chip.blockSignals(True)
-            chip.setChecked(bool(t and t.mute))
-            chip.blockSignals(False)
-        name = self._mix_name() if has else ""
-        orig = self._track("original")
-        note = ""
-        if has and orig is not None and not orig.mute and not any(t.solo for t in self.mixer.tracks):
-            note = " · 원본 트랙도 켜져 있어 소리가 겹쳐 들립니다 (저장에는 원본이 들어가지 않아요)"
-        self.mix_state.setText((f"지금 조합: {name}" if name else "지금 조합: 들리는 트랙 없음") + note if has else "")
-        self.mix_state.setVisible(has)
-        self.mix_save_btn.setEnabled(has and bool(name) and not self.busy())
 
     def reset_mix(self):
         """모두 켜기: 음소거·솔로 해제 + 볼륨 100% (원본 참고 트랙은 꺼 둠)."""
@@ -1526,22 +1448,6 @@ class MainWindow(QMainWindow):
             row.set_muted(key == "original" and self.result is not None)
             row.slider.setValue(100)
         self._refresh_audible()
-
-    def export_mix(self):
-        """지금 들리는 대로 한 파일로 저장 (원본 − 꺼진 트랙 + 볼륨 차이 → 남는 악기는 원본 음질 그대로)."""
-        if self.result is None:
-            return
-        on, off, gains = self._mix_plan()
-        if not on:
-            self._error("들리는 트랙이 없습니다. 트랙을 하나 이상 켜 주세요.")
-            return
-        fmt = self.fmt_combo.currentData()
-        ext = audio_io.EXPORT_FORMATS[fmt][1]
-        suffix = f"믹스 ({self._mix_name()})"
-        name = f"{self._song()} - {suffix}{self._key_suffix()}{ext}"
-        job = ExportJob(audio_io.unique_path(self._song_dir() / audio_io.safe_filename(name)), fmt, suffix, "mr",
-                        excluded=off, gains=gains)
-        self._run_export([job])
 
     def _on_guide(self, *_):
         on = self.guide_box.isChecked()
@@ -2669,21 +2575,20 @@ HELP_TEXT = """[홈 화면 — 원클릭]
 
 
 HELP_TEXT_6 = """[기본 흐름]
-1. [파일 열기] 또는 창에 음원 파일을 끌어다 놓습니다 (YouTube 주소도 가능).
-2. 왼쪽 [AI 분리 시작] → 보컬 · 드럼 · 베이스 · 기타 · 피아노 · 나머지 악기 6개 트랙으로 나뉩니다.
-3. ▶ 재생(Space)하면서 트랙을 켜고 끄며 듣습니다.
+1. 왼쪽 ① [파일 열기] · [YouTube], 또는 창에 음원 파일을 끌어다 놓습니다.
+2. 필요하면 ② 키 · ③ 템포를 맞춥니다 (분리 전·후 언제든 바꿀 수 있어요).
+3. ④ [AI 분리 시작] → 보컬 · 드럼 · 베이스 · 기타 · 피아노 · 나머지 악기 6개 트랙으로 나뉩니다.
+4. ▶ 재생(Space)하면서 오른쪽 트랙을 켜고 끄며 듣습니다.
 
-[골라 듣기]
+[골라 듣기 — 오른쪽 트랙]
 • 한 악기만 듣기: 그 트랙의 S(솔로) 버튼. 여러 트랙의 S 를 켜면 그 트랙들만 들립니다.
-• 한 악기만 빼고 듣기: 그 트랙의 M(음소거) 버튼, 또는 왼쪽 [○○ 빼기] 버튼.
-• 섞는 비율 바꾸기: 트랙의 볼륨 슬라이더 (0~150%).
-• 처음 상태로: 왼쪽 [모두 켜기].
+• 한 악기만 빼고 듣기: 그 트랙의 M(음소거) 버튼.
+• 섞는 비율 바꾸기: 트랙의 볼륨 슬라이더 (0~150%, 더블클릭하면 100%).
+• 처음 상태로: 오른쪽 위 ⋯ 메뉴 → [모든 음소거·솔로 해제].
 • '원본' 트랙은 비교용입니다. 분리 후에는 꺼져 있고, S 를 누르면 원곡 그대로 들립니다.
 
 [저장]
-• [지금 들리는 대로 저장]: 켜져 있는 트랙을 지금 볼륨 그대로 섞어 파일 하나로 저장합니다.
-  예) 피아노만 끄고 저장 → 피아노 없는 반주 / 드럼·베이스만 켜고 저장 → 리듬 트랙
-• [선택한 트랙 저장]: 트랙 카드의 스위치가 켜진 트랙을 각각 파일로 저장합니다.
+• [선택한 트랙 저장]: 트랙 카드 오른쪽 위 스위치가 켜진 트랙을 각각 파일로 저장합니다.
 • [전체 트랙 저장]: 6개 트랙을 각각 파일로 저장합니다 (DAW 로 가져갈 때).
 • 저장 형식·위치는 아래 막대와 [설정]에서 바꿉니다 (기본 WAV 24-bit).
 
