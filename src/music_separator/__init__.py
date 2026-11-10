@@ -55,4 +55,4 @@ else:
 APP_ID = "MusicSeparator"
 ORG_NAME = "MusicSeparator"
 DATA_DIR_NAME = "Music Separator"      # macOS ~/Library/Application Support/<이름>
-__version__ = "1.3.9"
+__version__ = "1.4.0"

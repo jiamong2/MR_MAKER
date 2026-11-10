@@ -1,6 +1,6 @@
 # 사용한 오픈소스와 라이선스
 
-MR MAKER for ui.clover 배포 파일에는 다음 오픈소스가 포함됩니다. 배포·상업적 이용 전에 각 라이선스를 확인하세요.
+MR MAKER for ui.clover 와 MR SEPARATOR for ui.clover 배포 파일에는 다음 오픈소스가 포함됩니다. (MR SEPARATOR 는 htdemucs_ft 보컬 모델 대신 Demucs htdemucs · htdemucs_6s 모델을 포함하고, 품질 우선 분리에는 같은 BS-RoFormer SW 가중치의 여섯 출력을 모두 사용합니다.) 배포·상업적 이용 전에 각 라이선스를 확인하세요.
 
 | 구성 요소 | 용도 | 라이선스 |
 |---|---|---|

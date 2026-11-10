@@ -14,7 +14,22 @@ AI 처리는 모두 내 컴퓨터에서 하고, 음원이 외부 서버로 전�
 ![고급 옵션](docs/screenshot-advanced.png)
 </details>
 
-## 주요 기능
+## MR SEPARATOR for ui.clover (6-Stem 에디션)
+
+<img src="assets/icon_separator.png" width="72" align="right" alt="MR SEPARATOR 아이콘">
+
+같은 코드로 만드는 두 번째 프로그램입니다. 악기를 연주하거나 카피·편곡을 하는 사람을 위해 곡을
+**보컬 · 드럼 · 베이스 · 기타 · 피아노 · 나머지 악기** 6개 트랙으로 나누고, 트랙 화면이 곧 첫 화면입니다.
+
+- 기본 모델은 BS-RoFormer SW (내려받아 쓸 수 있는 모델 가운데 피아노 분리 점수가 가장 높음, MVSEP 피아노 SDR 7.80dB)
+- 골라 듣기: S(솔로) · M(음소거) · [○○ 빼기] · 트랙별 볼륨 → **[지금 들리는 대로 저장]** 으로 그 조합을 파일 하나로
+- 키·템포 조절, YouTube 입력, 트랙별 저장은 MR MAKER 와 같음. 두 프로그램은 함께 설치할 수 있고 AI 모델을 같이 씀
+- 사용 방법: [MR SEPARATOR 사용 설명서 (PDF)](docs/MR_SEPARATOR_사용설명서.pdf)
+- 소스 실행: `python run_separator.py` · 빌드: `python scripts/build.py --edition separator`
+
+![MR SEPARATOR](docs/screenshot-separator.png)
+
+## 주요 기능 (MR MAKER)
 
 | 구분 | 내용 |
 |---|---|
