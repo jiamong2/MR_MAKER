@@ -166,12 +166,12 @@ jobs:
         include:
           - { name: windows-x64-cpu,  os: windows-latest, torch: windows-cpu,  variant: cpu,    edition: maker,     exe: MRMaker,     models: models }
           - { name: windows-x64-cuda, os: windows-latest, torch: windows-cuda, variant: cuda,   edition: maker,     exe: MRMaker,     models: models }
-          - { name: macos-arm64,      os: macos-14,       torch: macos-arm64,  variant: arm64,  edition: maker,     exe: MRMaker,     models: models }
+          - { name: macos-arm64,      os: macos-15,       torch: macos-arm64,  variant: arm64,  edition: maker,     exe: MRMaker,     models: models }
           - { name: macos-x86_64,     os: macos-15-intel, torch: macos-intel,  variant: x86_64, edition: maker,     exe: MRMaker,     models: models }
           # MR SEPARATOR (6-Stem 에디션) — 같은 코드, 다른 이름·설치 식별자
           - { name: windows-x64-cpu,  os: windows-latest, torch: windows-cpu,  variant: cpu,    edition: separator, exe: MRSeparator, models: models-separator }
           - { name: windows-x64-cuda, os: windows-latest, torch: windows-cuda, variant: cuda,   edition: separator, exe: MRSeparator, models: models-separator }
-          - { name: macos-arm64,      os: macos-14,       torch: macos-arm64,  variant: arm64,  edition: separator, exe: MRSeparator, models: models-separator }
+          - { name: macos-arm64,      os: macos-15,       torch: macos-arm64,  variant: arm64,  edition: separator, exe: MRSeparator, models: models-separator }
           - { name: macos-x86_64,     os: macos-15-intel, torch: macos-intel,  variant: x86_64, edition: separator, exe: MRSeparator, models: models-separator }
     runs-on: ${{ matrix.os }}
     name: build (${{ matrix.exe }} ${{ matrix.name }})
