@@ -1,6 +1,6 @@
 <!--
   MR MAKER / MR SEPARATOR for ui.clover - Windows Installer (MSI) 패키지 (WiX Toolset v5 + WixToolset.UI.wixext)
-  (MR SEPARATOR 는 scripts/build.py --edition separator 가 AppName · ExeName · UpgradeCode 등을 -d 로 넘겨 같은 파일로 만든다)
+  (MR SEPARATOR 는 scripts/build.py 의 edition separator 옵션이 AppName · ExeName · UpgradeCode 등을 넘겨 같은 파일로 만든다)
 
   브라우저로 받은 낯선 .exe 설치 파일을 격리하는 백신(V3 등)이 있어, Windows 자체 설치 관리자(msiexec)가 여는
   MSI 로 배포한다.
