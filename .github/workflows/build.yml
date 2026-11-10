@@ -1,4 +1,5 @@
-# MR MAKER for ui.clover - Windows / macOS 자동 빌드 + 실제 실행 테스트
+# MR MAKER / MR SEPARATOR for ui.clover - Windows / macOS 자동 빌드 + 실제 실행 테스트
+# 같은 코드로 두 프로그램(에디션)을 만든다: maker = MR MAKER (2-Stem), separator = MR SEPARATOR (6-Stem)
 #
 # 실행 방법
 #   - main 브랜치에 push 또는 Pull Request → 테스트 + 빌드
@@ -31,6 +32,11 @@ on:
         description: "Intel Mac 빌드도 만들기"
         type: boolean
         default: true
+      edition:
+        description: "만들 프로그램 (both = 둘 다 / maker = MR MAKER 만 / separator = MR SEPARATOR 만)"
+        type: choice
+        options: [both, maker, separator]
+        default: both
 
 concurrency:
   group: build-${{ github.ref }}
@@ -77,6 +83,15 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python run.py --gui-smoke smoke-linux.png
+      # MR SEPARATOR (6-Stem 에디션): 분리 → 골라 듣기 → 믹스 저장 → 키·템포
+      - name: MR SEPARATOR selftest + GUI smoke (6-Stem, 초소형 테스트 모델)
+        env:
+          QT_QPA_PLATFORM: offscreen
+          MUSIC_SEPARATOR_EDITION: separator
+        run: |
+          python run.py --selftest --model demucs_unittest --report selftest-separator.json
+          python run.py --selftest --model roformer_unittest --seconds 6 --report selftest-separator-roformer-unit.json
+          python run.py --gui-smoke smoke-separator.png
       # 고급 엔진(BS-RoFormer SW): 실제 가중치 다운로드(URL·SHA256) + 로드 + 분리 품질까지 확인
       - uses: actions/cache@v6
         with:
@@ -85,7 +100,10 @@ jobs:
       - name: Advanced engine selftest (BS-RoFormer SW, CPU)
         env:
           MUSIC_SEPARATOR_DATA_DIR: ${{ github.workspace }}/.msdata
-        run: python run.py --selftest --engine roformer --seconds 6 --report selftest-roformer.json
+        run: |
+          python run.py --selftest --engine roformer --seconds 6 --report selftest-roformer.json
+          # 같은 모델로 6-Stem (MR SEPARATOR): 보컬·드럼·베이스·기타·피아노 + 나머지, 트랙 합 = 원본
+          MUSIC_SEPARATOR_EDITION=separator python run.py --selftest --engine roformer --seconds 6 --report selftest-roformer-6stem.json
       - name: YouTube audio check (CC-BY 영상, 실패해도 빌드는 계속)
         continue-on-error: true
         run: python scripts/youtube_check.py --annotate
@@ -95,7 +113,8 @@ jobs:
           name: test-linux
           path: |
             smoke-linux*
-            selftest-roformer.json
+            smoke-separator*
+            selftest-*.json
             youtube_check.json
           retention-days: 7
 
@@ -112,18 +131,30 @@ jobs:
         with:
           path: build/models
           key: demucs-models-v2-htdemucs_ft_vocals
+      # MR SEPARATOR 에 넣을 모델: 속도 우선(Demucs 6-Stem)용 htdemucs + htdemucs_6s
+      - uses: actions/cache@v6
+        id: cache6
+        with:
+          path: build/models-separator
+          key: demucs-models-v1-separator-htdemucs-htdemucs_6s
       - name: Download models
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: steps.cache.outputs.cache-hit != 'true' || steps.cache6.outputs.cache-hit != 'true'
         run: |
           pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements/common.txt
           pip install --no-deps -r requirements/demucs.txt
           python scripts/fetch_models.py build/models htdemucs_ft_vocals
-      - run: ls -laR build/models
+          python scripts/fetch_models.py build/models-separator htdemucs htdemucs_6s
+      - run: ls -laR build/models build/models-separator
       - uses: actions/upload-artifact@v7
         with:
           name: models
           path: build/models
+          retention-days: 3
+      - uses: actions/upload-artifact@v7
+        with:
+          name: models-separator
+          path: build/models-separator
           retention-days: 3
 
   # -------------------------------------------------------------- 배포 빌드
@@ -133,15 +164,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: windows-x64-cpu,  os: windows-latest, torch: windows-cpu,  variant: cpu }
-          - { name: windows-x64-cuda, os: windows-latest, torch: windows-cuda, variant: cuda }
-          - { name: macos-arm64,      os: macos-14,       torch: macos-arm64,  variant: arm64 }
-          - { name: macos-x86_64,     os: macos-15-intel, torch: macos-intel,  variant: x86_64 }
+          - { name: windows-x64-cpu,  os: windows-latest, torch: windows-cpu,  variant: cpu,    edition: maker,     exe: MRMaker,     models: models }
+          - { name: windows-x64-cuda, os: windows-latest, torch: windows-cuda, variant: cuda,   edition: maker,     exe: MRMaker,     models: models }
+          - { name: macos-arm64,      os: macos-14,       torch: macos-arm64,  variant: arm64,  edition: maker,     exe: MRMaker,     models: models }
+          - { name: macos-x86_64,     os: macos-15-intel, torch: macos-intel,  variant: x86_64, edition: maker,     exe: MRMaker,     models: models }
+          # MR SEPARATOR (6-Stem 에디션) — 같은 코드, 다른 이름·설치 식별자
+          - { name: windows-x64-cpu,  os: windows-latest, torch: windows-cpu,  variant: cpu,    edition: separator, exe: MRSeparator, models: models-separator }
+          - { name: windows-x64-cuda, os: windows-latest, torch: windows-cuda, variant: cuda,   edition: separator, exe: MRSeparator, models: models-separator }
+          - { name: macos-arm64,      os: macos-14,       torch: macos-arm64,  variant: arm64,  edition: separator, exe: MRSeparator, models: models-separator }
+          - { name: macos-x86_64,     os: macos-15-intel, torch: macos-intel,  variant: x86_64, edition: separator, exe: MRSeparator, models: models-separator }
     runs-on: ${{ matrix.os }}
-    name: build (${{ matrix.name }})
+    name: build (${{ matrix.exe }} ${{ matrix.name }})
     env:
-      SKIP: ${{ (matrix.variant == 'cuda' && github.event_name == 'workflow_dispatch' && !inputs.build_cuda) || (matrix.variant == 'cuda' && github.event_name == 'pull_request') || (matrix.variant == 'x86_64' && github.event_name == 'workflow_dispatch' && !inputs.build_intel_mac) }}
+      SKIP: ${{ (matrix.variant == 'cuda' && github.event_name == 'workflow_dispatch' && !inputs.build_cuda) || (matrix.variant == 'cuda' && github.event_name == 'pull_request') || (matrix.variant == 'x86_64' && github.event_name == 'workflow_dispatch' && !inputs.build_intel_mac) || (github.event_name == 'workflow_dispatch' && inputs.edition != 'both' && inputs.edition != matrix.edition) }}
       MS_VARIANT: ${{ matrix.variant }}
+      MS_EDITION: ${{ matrix.edition }}
+      EXE: ${{ matrix.exe }}
       HAS_MAC_CERT: ${{ secrets.MACOS_CERT_P12_BASE64 != '' }}
       HAS_WIN_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
     defaults:
@@ -189,8 +227,9 @@ jobs:
           echo "bootloader stock=$OLD custom=$NEW"
           if [ "$OLD" = "$NEW" ]; then echo "::error::bootloader was not rebuilt"; exit 1; fi
 
+      # 단위 테스트는 에디션과 무관하게 같은 코드를 보므로 플랫폼마다 한 번(MR MAKER 빌드)만 실행
       - name: Unit tests (native)
-        if: env.SKIP != 'true'
+        if: env.SKIP != 'true' && matrix.edition == 'maker'
         run: |
           set -o pipefail
           pytest -q tests -rfE --tb=short 2>&1 | tee pytest.log
@@ -204,7 +243,7 @@ jobs:
       - uses: actions/download-artifact@v8
         if: env.SKIP != 'true' && env.BUNDLE_MODELS == 'true'
         with:
-          name: models
+          name: ${{ matrix.models }}
           path: build/models
 
       - name: Install Inno Setup
@@ -254,7 +293,7 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
           MS_WIN_SIGN_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
-          ARGS="--variant ${{ matrix.variant }}"
+          ARGS="--variant ${{ matrix.variant }} --edition ${{ matrix.edition }}"
           if [ "$BUNDLE_MODELS" = "true" ]; then ARGS="$ARGS --bundle-models build/models"; fi
           set -o pipefail
           python scripts/build.py $ARGS 2>&1 | tee build.log
@@ -264,7 +303,7 @@ jobs:
         if: env.SKIP != 'true' && runner.os == 'Windows'
         shell: pwsh
         run: |
-          $exe = "dist\MRMaker\MRMaker.exe"
+          $exe = "dist\${env:EXE}\${env:EXE}.exe"
           $st = @("--selftest", "--preset", "speed", "--report", "selftest-${{ matrix.name }}.json")
           if ($env:BUNDLE_MODELS -eq 'true') { $st += "--no-download" }
           $p = Start-Process $exe -ArgumentList $st -Wait -PassThru -NoNewWindow
@@ -280,10 +319,10 @@ jobs:
           # 설치 프로그램 무인 설치 → 설치된 프로그램으로 다시 테스트
           $setup = Get-ChildItem dist\release\*-setup.exe | Select-Object -First 1
           if ($setup) {
-            $dir = "$env:RUNNER_TEMP\MRMakerInstalled"
+            $dir = "$env:RUNNER_TEMP\${env:EXE}Installed"
             $p = Start-Process $setup.FullName -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/DIR=`"$dir`"" -Wait -PassThru
             if ($p.ExitCode -ne 0) { throw "installer failed ($($p.ExitCode))" }
-            $p = Start-Process "$dir\MRMaker.exe" -ArgumentList "--selftest","--model","demucs_unittest","--report","selftest-installed.json" -Wait -PassThru
+            $p = Start-Process "$dir\${env:EXE}.exe" -ArgumentList "--selftest","--model","demucs_unittest","--report","selftest-installed.json" -Wait -PassThru
             Get-Content selftest-installed.json
             if ($p.ExitCode -ne 0) { throw "installed app selftest failed" }
           }
@@ -292,7 +331,7 @@ jobs:
         if: env.SKIP != 'true' && runner.os == 'macOS'
         run: |
           APP=$(ls -d dist/*.app | head -1); NAME=$(basename "$APP")
-          BIN="$APP/Contents/MacOS/MRMaker"
+          BIN="$APP/Contents/MacOS/$EXE"
           DL=""; [ "$BUNDLE_MODELS" = "true" ] && DL="--no-download"
           "$BIN" --selftest --preset speed --report "selftest-${{ matrix.name }}.json" $DL
           "$BIN" --selftest --model roformer_unittest --seconds 6 --report "selftest-roformer-${{ matrix.name }}.json"
@@ -301,7 +340,7 @@ jobs:
           # DMG 를 마운트해서 그 안의 앱이 실행되는지 확인
           DMG=$(ls dist/release/*.dmg | head -1)
           MNT=$(hdiutil attach -nobrowse -readonly "$DMG" | tail -1 | awk -F'\t' '{print $NF}')
-          "$MNT/$NAME/Contents/MacOS/MRMaker" --selftest --model demucs_unittest --report selftest-dmg.json
+          "$MNT/$NAME/Contents/MacOS/$EXE" --selftest --model demucs_unittest --report selftest-dmg.json
           hdiutil detach "$MNT"
           codesign -dv --verbose=2 "$APP" 2>&1 | head -5 || true
 
@@ -319,7 +358,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: env.SKIP != 'true' && always()
         with:
-          name: test-${{ matrix.name }}
+          name: test-${{ matrix.exe }}-${{ matrix.name }}
           path: |
             selftest-*.json
             smoke-*.png
@@ -329,7 +368,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: env.SKIP != 'true'
         with:
-          name: MRMaker-${{ matrix.name }}
+          name: ${{ matrix.exe }}-${{ matrix.name }}
           path: dist/release/*
           retention-days: 7
           compression-level: 0
@@ -349,7 +388,7 @@ jobs:
         run: echo "tag=v$(python3 -c "import re;print(re.search(r'__version__ = \"([^\"]+)\"', open('src/music_separator/__init__.py').read()).group(1))")" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v8
         with:
-          pattern: MRMaker-*
+          pattern: MR*-*
           path: release
           merge-multiple: true
       - name: Drop files over the 2GB release asset limit
@@ -360,7 +399,7 @@ jobs:
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || steps.ver.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: MR MAKER for ui.clover ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || steps.ver.outputs.tag }}
+          name: MR MAKER · MR SEPARATOR for ui.clover ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || steps.ver.outputs.tag }}
           body_path: packaging/RELEASE_NOTES.md
           files: release/*
           draft: false

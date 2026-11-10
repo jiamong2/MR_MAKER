@@ -225,7 +225,8 @@ def run(model: Optional[str] = None, allow_download: bool = True, report: Option
             src = work / "원클릭 입력.wav"
             audio_io.write_wav(src, audio_io.resample(sig, 44100, 48000) * 0.9, 24, 48000)
             spec = pipeline.JobSpec(str(src), work / "oneclick", target="both", fmt="wav32f", preset=preset,
-                                    engine=engine_key, device=dev, model_override=model, allow_download=False)
+                                    engine=engine_key, device=dev, model_override=model, allow_download=False,
+                                    mode=mode)
             r = pipeline.Pipeline(spec, work / "pipe").run()
             outs = {Path(o["file"]).name: o for o in r.report["outputs"]}
             mr = next(o for n, o in outs.items() if "MR" in n)
@@ -237,7 +238,7 @@ def run(model: Optional[str] = None, allow_download: bool = True, report: Option
             err = float(np.max(np.abs(mr_a - (native - audio_io.resample(voc_a, 44100, 48000)))))
             assert err < 1e-4, f"MR != 원본 - 보컬 ({err})"
             m3 = pipeline.JobSpec(str(src), work / "oneclick_mp3", target="mr", fmt="mp3", preset=preset,
-                                  engine=engine_key, device=dev, model_override=model, semitones=2)
+                                  engine=engine_key, device=dev, model_override=model, semitones=2, mode=mode)
             r2 = pipeline.Pipeline(m3, work / "pipe").run(r.prepared, r.separation,
                                                           pipeline.Pipeline(spec, work / "pipe")
                                                           .separation_key(r.prepared))

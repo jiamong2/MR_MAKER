@@ -122,7 +122,12 @@ def build_variant() -> str:
 
 
 def app_default_preset() -> str:
-    """앱의 기본 처리 방식: CUDA 버전·Apple Silicon 은 품질 우선, CPU 버전·Intel Mac 은 속도 우선."""
+    """앱의 기본 처리 방식: CUDA 버전·Apple Silicon 은 품질 우선, CPU 버전·Intel Mac 은 속도 우선.
+    MR SEPARATOR(6-Stem)는 기타·피아노 품질이 목적이라 항상 품질 우선(BS-RoFormer SW)."""
+    from . import SEPARATOR
+
+    if SEPARATOR:
+        return "quality"
     return "quality" if build_variant() in ("cuda", "arm64") else "speed"
 
 # 한 가지 소스(보컬)만 학습된 하위 모델 — 나머지 출력은 쓰지 않음
@@ -371,7 +376,7 @@ def separate(
             raise SeparationCancelled()
 
     if engine == "roformer":
-        stages = [("보컬 분리 중 · BS-RoFormer", 1.0)]
+        stages = [("보컬 분리 중 · BS-RoFormer" if mode_key == "2" else "악기별 분리 중 · BS-RoFormer", 1.0)]
     else:
         main_cost = float(len(getattr(model_store.MODELS.get(plan["main"]), "sigs", ()) or (1,)))
         main_cost *= p.demucs_shifts

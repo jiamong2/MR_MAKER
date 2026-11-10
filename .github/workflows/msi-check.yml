@@ -114,3 +114,42 @@ jobs:
           Msi @("/x", "out\1.0.0\MRMaker-1.0.0.msi", "/qn") "u2.log"
           if (Test-Path "$custom\MRMaker.exe") { throw "custom location files left" }
           "MSI install / options / upgrade / split cabs / uninstall OK"
+      # MR SEPARATOR: 같은 .wxs 에 다른 이름·식별자를 넘겨 만든 MSI 가 MR MAKER 와 나란히 설치·삭제되는지
+      - name: MR SEPARATOR MSI side by side with MR MAKER
+        run: |
+          trap { Write-Host "::error::$_ @line $($_.InvocationInfo.ScriptLineNumber): $($_.InvocationInfo.Line.Trim())"; exit 1 }
+          New-Item -ItemType Directory -Force dist\MRSeparator\_internal | Out-Null
+          Copy-Item "$env:WINDIR\System32\where.exe" dist\MRSeparator\MRSeparator.exe
+          "hello" | Set-Content dist\MRSeparator\_internal\a.txt
+          $out = wix build packaging\windows\msi\MRMaker.wxs -arch x64 -ext WixToolset.UI.wixext -culture ko-KR `
+            -d Version=1.0.0 -d SourceDir="$PWD\dist\MRSeparator" -d IconPath="$PWD\assets\icon_separator.ico" `
+            -d AssetsDir="$PWD\packaging\windows\msi\separator" -d "AppName=MR SEPARATOR for ui.clover" `
+            -d "AppShort=MR SEPARATOR" -d ExeName=MRSeparator -d UpgradeCode=D2C8F5A1-7E43-4B9A-9F16-5A0B3E8D4C72 `
+            -d StartMenuGuid=A91E6D34-2F7B-4C58-8D03-7B5E1F9A6C40 -d DesktopGuid=5F3A8C19-D6E2-47B1-B4A7-0C9D2E6F8A53 `
+            -d "InstallerKey=Software\MusicSeparator\MRSeparatorInstaller" -o out\sep\MRSeparator-1.0.0.msi 2>&1
+          $out | ForEach-Object { Write-Host $_ }
+          if ($LASTEXITCODE -ne 0) { $out | Select-Object -Last 12 | ForEach-Object { Write-Host "::error::$_" }; throw "wix build failed (separator)" }
+          function Msi($argList, $log) {
+            $p = Start-Process msiexec -ArgumentList ($argList + @("/l*v", $log)) -Wait -PassThru
+            if ($p.ExitCode -ne 0) {
+              Select-String -Path $log -Pattern "error|Return value 3" | Select-Object -Last 10 | ForEach-Object { Write-Host "::error::$($_.Line)" }
+              throw "msiexec $argList failed $($p.ExitCode)"
+            }
+          }
+          $mk = Join-Path $env:LOCALAPPDATA "Programs\MR MAKER (MSI)"
+          $sp = Join-Path $env:LOCALAPPDATA "Programs\MR SEPARATOR (MSI)"
+          $menu = [Environment]::GetFolderPath("Programs")
+          Msi @("/i", "out\1.0.0\MRMaker-1.0.0.msi", "/qn") "s1.log"
+          Msi @("/i", "out\sep\MRSeparator-1.0.0.msi", "/qn") "s2.log"
+          if (-not (Test-Path "$mk\MRMaker.exe")) { throw "MR MAKER was removed by the MR SEPARATOR install" }
+          if (-not (Test-Path "$sp\MRSeparator.exe")) { throw "MR SEPARATOR exe not installed" }
+          if (-not (Test-Path "$menu\MR MAKER.lnk") -or -not (Test-Path "$menu\MR SEPARATOR.lnk")) { throw "start menu shortcuts missing" }
+          $wi = New-Object -ComObject WindowsInstaller.Installer
+          $a = @($wi.RelatedProducts("{6FA73F04-BFA9-4E99-8B94-39B539B8F37D}")).Count
+          $b = @($wi.RelatedProducts("{D2C8F5A1-7E43-4B9A-9F16-5A0B3E8D4C72}")).Count
+          if ($a -ne 1 -or $b -ne 1) { throw "expected one product each, got maker=$a separator=$b" }
+          Msi @("/x", "out\sep\MRSeparator-1.0.0.msi", "/qn") "s3.log"
+          if (Test-Path "$sp\MRSeparator.exe") { throw "MR SEPARATOR files left after uninstall" }
+          if (-not (Test-Path "$mk\MRMaker.exe") -or -not (Test-Path "$menu\MR MAKER.lnk")) { throw "uninstalling MR SEPARATOR damaged MR MAKER" }
+          Msi @("/x", "out\1.0.0\MRMaker-1.0.0.msi", "/qn") "s4.log"
+          "MR SEPARATOR MSI: build / side-by-side install / independent uninstall OK"

@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
                                QMessageBox, QProgressBar, QPushButton, QScrollArea, QScrollBar, QSizePolicy, QSlider,
                                QDoubleSpinBox, QStackedWidget, QVBoxLayout, QWidget)
 
-from .. import (APP_BRAND, APP_NAME, APP_SHORT, __version__, audio_io, engine, models, paths, pipeline, pitch, system,
+from .. import (APP_BRAND, APP_NAME, APP_SHORT, SEPARATOR, __version__, audio_io, engine, models, paths, pipeline, pitch, system,
                 tempo, youtube)
 from ..dsp import audible_flags
 from ..player import Mixer, Player, Track
@@ -32,9 +32,24 @@ from .workers import (BpmThread, ExportThread, HarmonyThread, KeyThread, LoadedA
 
 log = logging.getLogger(__name__)
 
-MODE = "2"      # 보컬 담당 사용자용: 2-Stem(보컬 / 반주)만 사용
+# MR MAKER: 보컬 담당 사용자용 2-Stem(보컬 / 반주). MR SEPARATOR: 6-Stem(보컬·드럼·베이스·기타·피아노·나머지)
+MODE = "6" if SEPARATOR else "2"
 
-ENGINE_INFO = {
+ENGINE_INFO_6 = {
+    "roformer": ("BS-RoFormer SW 로 6개 트랙 분리",
+                 "보컬·드럼·베이스·기타·피아노를 한 번에 나눕니다. 내려받아 쓸 수 있는 모델 가운데 피아노 분리 점수가 "
+                 "가장 높습니다 (MVSEP 피아노 SDR 7.80dB). 여섯 트랙을 모두 더하면 원본과 같습니다."),
+    "demucs": ("Demucs 로 빠르게 6개 트랙 분리",
+               "가볍고 빠르지만 기타·피아노 품질이 많이 떨어집니다. 빨리 훑어볼 때만 쓰세요."),
+}
+
+PRESET_DESC_6 = {
+    "speed": "Demucs 로 빠르게 나눕니다. 기타·피아노 품질이 많이 떨어져 훑어보는 용도입니다 (CPU 에서도 곡 길이의 1~2배).",
+    "quality": "BS-RoFormer SW 로 나눕니다 (기본). 피아노·기타까지 가장 깨끗합니다. GPU 권장, CPU 는 오래 걸립니다.",
+    "best": "구간을 4번 겹쳐 처리해 경계를 더 매끄럽게 합니다 (시간 약 2배, 차이는 작음).",
+}
+
+ENGINE_INFO = ENGINE_INFO_6 if SEPARATOR else {
     "roformer": ("BS-RoFormer SW 로 보컬 분리",
                  "보컬과 반주 품질이 가장 좋은 모델입니다 (MVSEP 기준 보컬 SDR 11.30dB, Demucs 8.33dB). "
                  "반주는 '원본 − 보컬'로 만들어 악기 소리가 원본 그대로 남습니다."),
@@ -108,7 +123,8 @@ class SettingsDialog(QDialog):
                             "faint", wrap=True))
         lay.addSpacing(6)
         lay.addWidget(label("음질", "sectionLabel"))
-        self.native_box = QCheckBox("MR을 원본 샘플레이트로 저장 (권장)")
+        self.native_box = QCheckBox("믹스를 원본 샘플레이트로 저장 (권장)" if SEPARATOR
+                                    else "MR을 원본 샘플레이트로 저장 (권장)")
         self.native_box.setChecked(win.keep_native_rate)
         self.native_box.toggled.connect(win.set_keep_native_rate)
         lay.addWidget(self.native_box)
@@ -122,7 +138,7 @@ class SettingsDialog(QDialog):
         self.sound_box.setChecked(win.settings.value("done_sound", True, type=bool))
         self.sound_box.toggled.connect(lambda v: win.settings.setValue("done_sound", bool(v)))
         lay.addWidget(self.sound_box)
-        lay.addWidget(label("작업이 끝나면 작업 표시줄의 MR MAKER 아이콘도 깜빡여 알려 줍니다.", "faint", wrap=True))
+        lay.addWidget(label(f"작업이 끝나면 작업 표시줄의 {APP_SHORT} 아이콘도 깜빡여 알려 줍니다.", "faint", wrap=True))
         lay.addSpacing(6)
         lay.addWidget(label("AI 모델", "sectionLabel"))
         mrow = QHBoxLayout()
@@ -261,6 +277,9 @@ class MainWindow(QMainWindow):
         self._wire_home()
 
     def show_home(self):
+        if SEPARATOR:                      # MR SEPARATOR 는 트랙 화면이 곧 첫 화면
+            self.show_advanced()
+            return
         self.pages.setCurrentIndex(0)
         self.setMinimumSize(*self.HOME_MIN)
         self._update_home_footer()
@@ -306,6 +325,7 @@ class MainWindow(QMainWindow):
         self.home_btn.setToolTip("홈 화면으로 (원클릭 추출)")
         self.home_btn.clicked.connect(self.show_home)
         lay.addWidget(self.home_btn)
+        self.home_btn.setVisible(not SEPARATOR)
         lay.addWidget(LogoTile())
         tcol = QVBoxLayout()
         tcol.setSpacing(3)
@@ -399,7 +419,10 @@ class MainWindow(QMainWindow):
         lay.setSpacing(16)
 
         # ---- 1. 분리 ----
-        c, cl = card("1", "AI 음원 분리 · 2-Stem", "VOCALS / INSTRUMENTAL")
+        if SEPARATOR:
+            c, cl = card("1", "AI 음원 분리 · 6-Stem", "VOCALS / DRUMS / BASS / GUITAR / PIANO / OTHER")
+        else:
+            c, cl = card("1", "AI 음원 분리 · 2-Stem", "VOCALS / INSTRUMENTAL")
         info = QFrame()
         info.setObjectName("InfoBox")
         il = QVBoxLayout(info)
@@ -428,7 +451,7 @@ class MainWindow(QMainWindow):
             b.setProperty("kind", "seg")
             b.setCheckable(True)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.setToolTip(pr.description)
+            b.setToolTip(PRESET_DESC_6[key] if SEPARATOR else pr.description)
             b.setFixedHeight(38)
             self.preset_group.addButton(b)
             self.preset_btns[key] = b
@@ -520,6 +543,10 @@ class MainWindow(QMainWindow):
         self.vocal_save_btn.clicked.connect(self.export_vocals)
         cl.addWidget(self.vocal_save_btn)
         lay.addWidget(c)
+        c.setVisible(not SEPARATOR)
+        self.mix_save_btn: Optional[QPushButton] = None
+        if SEPARATOR:
+            lay.addWidget(self._build_mix_card())
 
         # ---- 3. 키 조절 ----
         c, cl = card("3", "키 조절", "KEY")
@@ -670,6 +697,37 @@ class MainWindow(QMainWindow):
         scroll.setWidget(panel)
         return scroll
 
+    def _build_mix_card(self) -> QWidget:
+        """MR SEPARATOR: 듣고 싶은 조합 만들기 + 지금 들리는 대로 저장."""
+        c, cl = card("2", "골라 듣기 · 믹스 저장", "LISTEN / MIX")
+        cl.addWidget(label("빼고 싶은 악기를 누르면 그 트랙이 꺼집니다 (트랙의 M 버튼과 같아요). 한 악기만 듣고 싶으면 "
+                           "오른쪽 트랙의 S(솔로) 버튼을 누르세요.", "dim", wrap=True))
+        self.mix_chip_box = QWidget()
+        self.mix_chip_grid = QGridLayout(self.mix_chip_box)
+        self.mix_chip_grid.setContentsMargins(0, 0, 0, 0)
+        self.mix_chip_grid.setSpacing(8)
+        cl.addWidget(self.mix_chip_box)
+        self.mix_empty = label("분리를 마치면 악기 버튼이 여기에 나타납니다.", "faint", wrap=True)
+        cl.addWidget(self.mix_empty)
+        self.mix_state = label("", "sectionLabel", wrap=True)
+        cl.addWidget(self.mix_state)
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        self.mix_reset_btn = text_button("모두 켜기", None, None, 46)
+        self.mix_reset_btn.setToolTip("음소거·솔로를 모두 풀고 볼륨을 100% 로 되돌립니다.")
+        self.mix_reset_btn.clicked.connect(self.reset_mix)
+        self.mix_save_btn = text_button("지금 들리는 대로 저장", "music", "primary", 46)
+        self.mix_save_btn.setToolTip("켜져 있는 트랙을 지금 볼륨 그대로 섞어 파일 하나로 저장합니다.\n"
+                                     "예: 피아노만 끄고 저장 → 피아노 없는 반주 (피아노 연습용)")
+        self.mix_save_btn.clicked.connect(self.export_mix)
+        glow(self.mix_save_btn, theme.ACCENT, 20, 60, 3)
+        row.addWidget(self.mix_reset_btn)
+        row.addWidget(self.mix_save_btn, 1)
+        cl.addLayout(row)
+        cl.addWidget(label("트랙을 하나씩 따로 저장하려면 아래 막대의 [선택한 트랙 저장] · [전체 트랙 저장]을 쓰세요. "
+                           "키·템포를 바꿨다면 저장에도 그대로 적용됩니다.", "faint", wrap=True))
+        return c
+
     def _build_tracks_panel(self) -> QWidget:
         panel = TracksPanel()
         pl = QVBoxLayout(panel)
@@ -786,12 +844,12 @@ class MainWindow(QMainWindow):
     def _build_menu(self):
         menu = PathMenu(self)
         acts = [
-            ("홈 화면", self.show_home, None),
+            *([] if SEPARATOR else [("홈 화면", self.show_home, None)]),
             ("파일 열기…", self.browse_file, QKeySequence.StandardKey.Open),
             ("YouTube에서 불러오기…", self.open_youtube, None),
             ("저장 폴더 변경…", self.choose_output_dir, None),
             None,
-            ("모든 음소거·솔로 해제", self.reset_mixer, None),
+            ("모든 음소거·솔로 해제", self.reset_mix if SEPARATOR else self.reset_mixer, None),
             ("전체 화면", self.toggle_fullscreen, QKeySequence.StandardKey.FullScreen),
             None,
             ("사용 방법", self.show_help, QKeySequence.StandardKey.HelpContents),
@@ -936,6 +994,11 @@ class MainWindow(QMainWindow):
         for w in (self.play_btn, self.stop_btn, self.rew_btn, self.seek):
             w.setEnabled(has_file)
         self.chip_empty.setVisible(not has_result)
+        if self.mix_save_btn is not None:
+            self.mix_empty.setVisible(not has_result)
+            self.mix_chip_box.setVisible(has_result)
+            self.mix_reset_btn.setEnabled(has_result)
+            self._update_mix_state()
         self.start_btn.setText("다시 분리" if has_result else "AI 분리 시작")
         self.home_btn.setEnabled(True)
 
@@ -948,7 +1011,8 @@ class MainWindow(QMainWindow):
         title, text = ENGINE_INFO[eng]
         self.info_title.setText(title)
         self.info_text.setText(text)
-        self.preset_hint.setText(engine.PRESETS[self.preset_key()].description)
+        self.preset_hint.setText(PRESET_DESC_6[self.preset_key()] if SEPARATOR
+                                 else engine.PRESETS[self.preset_key()].description)
         self._on_mode_options()
         self._update_device_hint()
         if save:
@@ -985,8 +1049,9 @@ class MainWindow(QMainWindow):
         if pref == "cpu" or not gpus:
             msg = f"{cpu.label}로 처리합니다." + ("" if gpus else " (사용 가능한 GPU 없음)")
             if self.resolved_engine() == "roformer":
-                msg += ("\nBS-RoFormer 는 CPU 에서 곡 길이의 수 배~10배 이상 걸립니다. 빨리 받고 싶으면 "
-                        "'속도 우선'을 선택하세요.")
+                msg += ("\nBS-RoFormer 는 CPU 에서 곡 길이의 수 배~10배 이상 걸립니다. " +
+                        ("기다리는 동안 다른 일을 해도 됩니다." if SEPARATOR else
+                         "빨리 받고 싶으면 '속도 우선'을 선택하세요."))
         else:
             msg = f"GPU 가속 사용: {gpus[0].label}\n문제가 생기면 자동으로 CPU로 다시 처리합니다."
         self.device_hint.setText(msg)
@@ -1082,8 +1147,8 @@ class MainWindow(QMainWindow):
         self._invalidate_key_cache()
         self._reset_tempo()
         self._start_bpm(la)
-        self.set_status(f"{la.source.name} ({audio_io.format_time(la.seconds)}) — 모드를 고르고 "
-                        "[AI 분리 시작]을 누르세요.")
+        self.set_status(f"{la.source.name} ({audio_io.format_time(la.seconds)}) — "
+                        + ("" if SEPARATOR else "모드를 고르고 ") + "[AI 분리 시작]을 누르세요.")
         self._set_state()
 
     def _on_load_failed(self, msg: str):
@@ -1134,7 +1199,9 @@ class MainWindow(QMainWindow):
             r = QMessageBox.question(
                 self, "처리 시간 안내",
                 "GPU가 없어 CPU로 처리합니다. BS-RoFormer 는 계산량이 많아 CPU에서는 곡 길이의 수 배~10배 이상 "
-                "걸릴 수 있습니다 (예: 4분 곡 → 15~40분).\n\n빨리 받으려면 '속도 우선'을 선택하세요. 계속할까요?")
+                "걸릴 수 있습니다 (예: 4분 곡 → 15~40분).\n\n" +
+                ("'속도 우선'은 빠르지만 기타·피아노 품질이 많이 떨어집니다. 계속할까요?" if SEPARATOR else
+                 "빨리 받으려면 '속도 우선'을 선택하세요. 계속할까요?"))
             if r != QMessageBox.StandardButton.Yes:
                 return
             self.settings.setValue("warned_roformer_cpu", True)
@@ -1177,7 +1244,7 @@ class MainWindow(QMainWindow):
         self._on_progress(0.0, "준비 중…")
         self.sep_thread.start()
         self._set_state()
-        self.set_status(f"2-Stem 분리 중 ({engine.ENGINES[resolved].short}, {engine.PRESETS[preset].title})… "
+        self.set_status(f"{engine.MODES[MODE].title} 분리 중 ({engine.ENGINES[resolved].short}, {engine.PRESETS[preset].title})… "
                         "처리 중에도 프로그램을 계속 사용할 수 있습니다.", "busy")
 
     def _show_progress(self, on: bool, cancellable: bool = True):
@@ -1239,9 +1306,9 @@ class MainWindow(QMainWindow):
         dev = {"cuda": "NVIDIA GPU", "mps": "Apple GPU", "cpu": "CPU"}.get(res.device, res.device)
         self.set_status(f"{engine.MODES[res.mode].title} 분리 완료 · {engine.ENGINES[res.engine].short} · {dev} · "
                         f"{audio_io.format_time(res.elapsed)} 소요 — ▶ 재생해서 들어 보세요.")
-        if self.loaded is not None and res.mode == MODE:    # 홈 화면 작업에서도 재사용
+        if self.loaded is not None and res.mode == MODE:    # 홈 화면 작업·화음 따기에서도 재사용
             self.last_sep = res
-            self.last_sep_key = pipeline.separation_key(self.loaded.source_id, res.model, res.preset)
+            self.last_sep_key = pipeline.separation_key(self.loaded.source_id, res.model, res.preset, res.mode)
         self._set_state()
         if (self.key_target, self.tempo_target) != (0, 100):
             self._apply_key()
@@ -1335,6 +1402,7 @@ class MainWindow(QMainWindow):
         t = self._track(key)
         if t:
             t.gain = g
+        self._update_mix_state()
 
     def _refresh_audible(self):
         tracks = self.mixer.tracks
@@ -1342,6 +1410,7 @@ class MainWindow(QMainWindow):
         for t, f in zip(tracks, flags):
             if t.key in self.rows:
                 self.rows[t.key].set_audible(f)
+        self._update_mix_state()
 
     def reset_mixer(self):
         for key, row in self.rows.items():
@@ -1380,11 +1449,99 @@ class MainWindow(QMainWindow):
 
     # ============================================================== MR ===
     def _build_chips(self, res: Optional[engine.SeparationResult]):
-        """2-Stem 에서는 악기 칩 대신 [MR 저장]/[보컬만 저장] 버튼을 사용."""
+        """MR MAKER(2-Stem)는 악기 칩 대신 [MR 저장]/[보컬만 저장] 버튼을 사용.
+        MR SEPARATOR 는 트랙마다 '빼기' 칩을 만들어 트랙의 음소거(M)와 서로 맞춘다."""
         for b in self.chips.values():
             b.setParent(None)
             b.deleteLater()
         self.chips.clear()
+        if not SEPARATOR or res is None:
+            return
+        from .icons import STEM_ICON
+
+        for i, stem in enumerate(res.stems):
+            chip = ChipButton(f"{engine.stem_label(stem.key, res.mode)} 빼기", STEM_ICON.get(stem.key, "wave"))
+            chip.setToolTip(f"{engine.stem_label(stem.key, res.mode)} 트랙을 끕니다 (다시 누르면 켜짐)")
+            chip.clicked.connect(lambda on, k=stem.key: self._on_mix_chip(k, on))
+            self.mix_chip_grid.addWidget(chip, i // 2, i % 2)
+            self.chips[stem.key] = chip
+
+    def _on_mix_chip(self, key: str, on: bool):
+        row = self.rows.get(key)
+        if row is not None:
+            row.set_muted(on)
+        if on and "original" in self.rows:       # 원본을 같이 틀면 뺀 악기가 다시 들리므로 원본은 끔
+            self.rows["original"].set_muted(True)
+
+    def _mix_plan(self) -> tuple[list, list, dict]:
+        """지금 들리는 조합: (들리는 트랙, 꺼진 트랙, 볼륨이 100% 가 아닌 트랙의 배율). 원본(참고용) 트랙은 제외."""
+        if self.result is None:
+            return [], [], {}
+        keys = [s.key for s in self.result.stems]
+        tracks = {t.key: t for t in self.mixer.tracks}
+        solo = [k for k in keys if k in tracks and tracks[k].solo]
+        if "original" in tracks and tracks["original"].solo and not solo:
+            return list(keys), [], {}            # 원본만 솔로 = 전체가 들리는 것과 같음
+        on = [k for k in keys if k in tracks and ((k in solo) if solo else not tracks[k].mute)
+              and tracks[k].gain > 0.005]
+        off = [k for k in keys if k not in on]
+        gains = {k: round(float(tracks[k].gain), 2) for k in on if abs(tracks[k].gain - 1.0) > 0.005}
+        return on, off, gains
+
+    def _mix_name(self) -> str:
+        on, off, gains = self._mix_plan()
+        if not on:
+            return ""
+        lab = self._label
+        if not off:
+            name = "전체"
+        elif len(off) <= 2 or len(off) < len(on):
+            name = "·".join(lab(k) for k in off) + " 제외"
+        else:
+            name = "+".join(lab(k) for k in on) + ("만" if len(on) == 1 else "")
+        return name + (", 볼륨 조절" if gains else "")
+
+    def _update_mix_state(self):
+        if self.mix_save_btn is None:
+            return
+        has = self.result is not None
+        for key, chip in self.chips.items():
+            t = self._track(key)
+            chip.blockSignals(True)
+            chip.setChecked(bool(t and t.mute))
+            chip.blockSignals(False)
+        name = self._mix_name() if has else ""
+        orig = self._track("original")
+        note = ""
+        if has and orig is not None and not orig.mute and not any(t.solo for t in self.mixer.tracks):
+            note = " · 원본 트랙도 켜져 있어 소리가 겹쳐 들립니다 (저장에는 원본이 들어가지 않아요)"
+        self.mix_state.setText((f"지금 조합: {name}" if name else "지금 조합: 들리는 트랙 없음") + note if has else "")
+        self.mix_state.setVisible(has)
+        self.mix_save_btn.setEnabled(has and bool(name) and not self.busy())
+
+    def reset_mix(self):
+        """모두 켜기: 음소거·솔로 해제 + 볼륨 100% (원본 참고 트랙은 꺼 둠)."""
+        for key, row in self.rows.items():
+            row.set_solo(False)
+            row.set_muted(key == "original" and self.result is not None)
+            row.slider.setValue(100)
+        self._refresh_audible()
+
+    def export_mix(self):
+        """지금 들리는 대로 한 파일로 저장 (원본 − 꺼진 트랙 + 볼륨 차이 → 남는 악기는 원본 음질 그대로)."""
+        if self.result is None:
+            return
+        on, off, gains = self._mix_plan()
+        if not on:
+            self._error("들리는 트랙이 없습니다. 트랙을 하나 이상 켜 주세요.")
+            return
+        fmt = self.fmt_combo.currentData()
+        ext = audio_io.EXPORT_FORMATS[fmt][1]
+        suffix = f"믹스 ({self._mix_name()})"
+        name = f"{self._song()} - {suffix}{self._key_suffix()}{ext}"
+        job = ExportJob(audio_io.unique_path(self._song_dir() / audio_io.safe_filename(name)), fmt, suffix, "mr",
+                        excluded=off, gains=gains)
+        self._run_export([job])
 
     def _on_guide(self, *_):
         on = self.guide_box.isChecked()
@@ -2179,6 +2336,8 @@ class MainWindow(QMainWindow):
         h = self.home
         kind = h.source_kind()
         source = h.source_text() if kind in ("file", "youtube") else ""
+        if SEPARATOR:                      # 홈 화면이 없으므로 지금 열어 둔 곡을 사용
+            kind, source = "file", (str(self.loaded.source) if self.loaded is not None else "")
         if not source:
             start = self.settings.value("last_dir", str(Path.home() / "Music"))
             path, _ = QFileDialog.getOpenFileName(self, "화음을 딸 곡 선택", start,
@@ -2217,11 +2376,13 @@ class MainWindow(QMainWindow):
             source=source, out_dir=self.output_dir, target="mr", semitones=0,
             fmt=self.fmt_combo.currentData() or audio_io.DEFAULT_FORMAT, preset=self.preset_key(),
             engine=self.engine_key(), device=device, formant_vocals=True, keep_native_rate=self.keep_native_rate,
-            model_override=os.environ.get("MUSIC_SEPARATOR_FORCE_MODEL") or None)
-        prev = self.last_prep if self.last_prep is not None and pipeline.source_id_for(source) == \
-            self.last_prep.source_id else None
-        t = HarmonyThread(spec, self.session_dir / "jobs", prev, self.last_sep if prev else None,
-                          self.last_sep_key if prev else None, self)
+            model_override=os.environ.get("MUSIC_SEPARATOR_FORCE_MODEL") or None, mode=MODE)
+        sid = pipeline.source_id_for(source)
+        prev = self.last_prep if self.last_prep is not None and sid == self.last_prep.source_id else None
+        # 트랙 화면에서 이미 분리한 곡이면 그 결과(보컬 트랙)를 그대로 사용
+        same = prev is not None or (self.loaded is not None and self.loaded.source_id == sid)
+        t = HarmonyThread(spec, self.session_dir / "jobs", prev, self.last_sep if same else None,
+                          self.last_sep_key if same else None, self)
         self.harmony_thread = t
         from PySide6.QtWidgets import QProgressDialog
 
@@ -2422,7 +2583,7 @@ class MainWindow(QMainWindow):
         self._on_mode_options()
 
     def show_help(self):
-        QMessageBox.information(self, "사용 방법", HELP_TEXT)
+        QMessageBox.information(self, "사용 방법", HELP_TEXT_6 if SEPARATOR else HELP_TEXT)
 
     def show_about(self):
         import platform
@@ -2505,3 +2666,34 @@ HELP_TEXT = """[홈 화면 — 원클릭]
 • NVIDIA GPU 또는 Apple Silicon Mac에서는 GPU로 훨씬 빠르게 처리됩니다.
 • GPU에서 문제가 생기면 자동으로 CPU로 다시 처리합니다.
 • 처리 중 [취소]를 누르면 바로 멈추고 임시 파일을 정리합니다."""
+
+
+HELP_TEXT_6 = """[기본 흐름]
+1. [파일 열기] 또는 창에 음원 파일을 끌어다 놓습니다 (YouTube 주소도 가능).
+2. 왼쪽 [AI 분리 시작] → 보컬 · 드럼 · 베이스 · 기타 · 피아노 · 나머지 악기 6개 트랙으로 나뉩니다.
+3. ▶ 재생(Space)하면서 트랙을 켜고 끄며 듣습니다.
+
+[골라 듣기]
+• 한 악기만 듣기: 그 트랙의 S(솔로) 버튼. 여러 트랙의 S 를 켜면 그 트랙들만 들립니다.
+• 한 악기만 빼고 듣기: 그 트랙의 M(음소거) 버튼, 또는 왼쪽 [○○ 빼기] 버튼.
+• 섞는 비율 바꾸기: 트랙의 볼륨 슬라이더 (0~150%).
+• 처음 상태로: 왼쪽 [모두 켜기].
+• '원본' 트랙은 비교용입니다. 분리 후에는 꺼져 있고, S 를 누르면 원곡 그대로 들립니다.
+
+[저장]
+• [지금 들리는 대로 저장]: 켜져 있는 트랙을 지금 볼륨 그대로 섞어 파일 하나로 저장합니다.
+  예) 피아노만 끄고 저장 → 피아노 없는 반주 / 드럼·베이스만 켜고 저장 → 리듬 트랙
+• [선택한 트랙 저장]: 트랙 카드의 스위치가 켜진 트랙을 각각 파일로 저장합니다.
+• [전체 트랙 저장]: 6개 트랙을 각각 파일로 저장합니다 (DAW 로 가져갈 때).
+• 저장 형식·위치는 아래 막대와 [설정]에서 바꿉니다 (기본 WAV 24-bit).
+
+[키 · 템포]
+• 키: −12 ~ +12 반음 (드럼은 음높이를 바꾸지 않습니다). 템포: 50% ~ 200%.
+• 재생과 저장에 모두 적용됩니다. 어려운 구간은 템포를 낮춰 연습하세요.
+
+[처리 방식]
+• 품질 우선(기본): BS-RoFormer SW. 피아노·기타까지 가장 깨끗합니다. GPU 권장.
+• 속도 우선: Demucs. 빠르지만 기타·피아노 품질이 많이 떨어집니다.
+• 최고 품질: 구간 겹침 4배 (시간 약 2배, 차이는 작음).
+• NVIDIA GPU·Apple Silicon Mac 에서는 훨씬 빠릅니다. CPU 만 있으면 4분 곡에 15~40분 정도 걸릴 수 있습니다.
+• 여섯 트랙을 모두 더하면 원본과 정확히 같습니다 (분리 과정에서 사라지는 소리가 없음)."""

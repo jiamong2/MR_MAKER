@@ -77,6 +77,7 @@ class JobSpec:
     keep_native_rate: bool = True
     model_override: Optional[str] = None
     allow_download: bool = True
+    mode: str = "2"                   # 분리 모드 (2 = 보컬/반주, 6 = MR SEPARATOR)
 
 
 @dataclass
@@ -106,9 +107,9 @@ class JobResult:
     reused_separation: bool = False
 
 
-def separation_key(source_id: str, models_used: str, preset: str) -> tuple:
-    """같은 입력·같은 모델·같은 처리 방식이면 분리 결과를 재사용."""
-    return (source_id, models_used, preset)
+def separation_key(source_id: str, models_used: str, preset: str, mode: str = "2") -> tuple:
+    """같은 입력·같은 모델·같은 처리 방식(·같은 분리 모드)이면 분리 결과를 재사용."""
+    return (source_id, models_used, preset) if mode == "2" else (source_id, models_used, preset, mode)
 
 
 def source_kind(text: str) -> str:
@@ -263,7 +264,7 @@ class Pipeline:
             self.report(1.0, "이전 분리 결과를 사용합니다")
             return previous, True
         self.enter("model", "AI 모델 확인 중…")
-        names = engine.required_models(spec.engine, "2", spec.preset, spec.model_override)
+        names = engine.required_models(spec.engine, spec.mode, spec.preset, spec.model_override)
         for name in names:
             if models.is_installed(name):
                 continue
@@ -293,7 +294,7 @@ class Pipeline:
         run_dir = self.work / f"sep_{int(time.time() * 1000)}"
         mix = np.load(prep.mix44_path, mmap_mode="r")
         try:
-            res = engine.separate(mix, "2", run_dir, engine=spec.engine, preset=spec.preset, device=spec.device,
+            res = engine.separate(mix, spec.mode, run_dir, engine=spec.engine, preset=spec.preset, device=spec.device,
                                   model_name=spec.model_override,
                                   progress=lambda f, m: self.report(f, m), cancel=self.cancel,
                                   notice=self._notice)
@@ -312,8 +313,8 @@ class Pipeline:
 
     def separation_key(self, prep: Prepared) -> tuple:
         s = self.spec
-        return separation_key(prep.source_id, " + ".join(engine.required_models(s.engine, "2", s.preset,
-                                                                                 s.model_override)), s.preset)
+        return separation_key(prep.source_id, " + ".join(engine.required_models(s.engine, s.mode, s.preset,
+                                                                                 s.model_override)), s.preset, s.mode)
 
     # ---------------------------------------------------------- 7~11 단계 ---
     def export(self, prep: Prepared, res: Optional[engine.SeparationResult]) -> ExportReport:

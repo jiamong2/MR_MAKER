@@ -4,11 +4,12 @@
   python scripts/build.py                          # 현재 OS 용 빌드
   python scripts/build.py --bundle-models build/models   # AI 모델 포함 빌드 (오프라인 즉시 사용)
   python scripts/build.py --variant cuda           # (Windows) 이름표만 cuda 로 — torch CUDA 빌드는 미리 설치
+  python scripts/build.py --edition separator      # MR SEPARATOR (6-Stem 에디션). 기본은 maker (MR MAKER)
 
 결과물: dist/release/
-  Windows : MRMaker-<ver>-windows-x64-<variant>-setup.exe, ...-portable.zip
-  macOS   : MRMaker-<ver>-macos-<arch>.dmg
-  Linux   : MRMaker-<ver>-linux-x86_64.tar.gz  (개발 확인용)
+  Windows : <MRMaker|MRSeparator>-<ver>-windows-x64-<variant>-setup.exe, ...-portable.zip, ....msi
+  macOS   : <MRMaker|MRSeparator>-<ver>-macos-<arch>.dmg
+  Linux   : <MRMaker|MRSeparator>-<ver>-linux-x86_64.tar.gz  (개발 확인용)
 """
 from __future__ import annotations
 
@@ -25,7 +26,42 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from music_separator import APP_NAME, EXE_NAME, __version__  # noqa: E402
+
+
+def _edition_from_args() -> str:
+    """--edition 은 프로그램 이름 등을 정하는 값이라 music_separator 를 import 하기 전에 읽는다."""
+    e = os.environ.get("MS_EDITION") or os.environ.get("MUSIC_SEPARATOR_EDITION") or "maker"
+    for i, a in enumerate(sys.argv):
+        if a == "--edition" and i + 1 < len(sys.argv):
+            e = sys.argv[i + 1]
+        elif a.startswith("--edition="):
+            e = a.split("=", 1)[1]
+    if e not in ("maker", "separator"):
+        raise SystemExit(f"알 수 없는 에디션: {e} (maker / separator)")
+    return e
+
+
+os.environ["MUSIC_SEPARATOR_EDITION"] = _edition_from_args()
+from music_separator import (APP_NAME, APP_SHORT, EDITION, EXE_NAME, ICON_STEM, SETTINGS_ID,  # noqa: E402
+                             __version__)
+
+# 설치 프로그램 식별자 (에디션마다 달라야 두 프로그램을 함께 설치할 수 있음). maker 값은 기존 설치와 같아야 업데이트됨.
+INSTALLER_IDS = {
+    "maker": {"inno_app_id": "6B0E4C1A-3B7D-4F8E-9C2A-7D51E0A9F3B4",
+              "msi_upgrade": "6FA73F04-BFA9-4E99-8B94-39B539B8F37D",
+              "msi_startmenu": "3E7B1C52-6A0D-4C7E-9E1B-2F4A8D6C0B11",
+              "msi_desktop": "8C2D4F61-1B3E-4A9C-B7D5-6E0F2A1C9D22",
+              "reg_installer": r"Software\MusicSeparator\Installer",
+              "reg_settings": r"Software\MusicSeparator",
+              "msi_assets": ""},
+    "separator": {"inno_app_id": "B4D9A2E7-5C1F-4E36-A8B0-3F6D7C2E91A5",
+                  "msi_upgrade": "D2C8F5A1-7E43-4B9A-9F16-5A0B3E8D4C72",
+                  "msi_startmenu": "A91E6D34-2F7B-4C58-8D03-7B5E1F9A6C40",
+                  "msi_desktop": "5F3A8C19-D6E2-47B1-B4A7-0C9D2E6F8A53",
+                  "reg_installer": r"Software\MusicSeparator\MRSeparatorInstaller",
+                  "reg_settings": r"Software\MusicSeparator\MRSeparator",
+                  "msi_assets": "separator"},
+}[EDITION]
 
 DIST = ROOT / "dist"
 RELEASE = DIST / "release"
@@ -55,7 +91,7 @@ def pyinstaller(bundle_models: str | None, variant: str = "cpu"):
     # 빌드 종류(cpu / cuda / arm64 / x86_64)를 앱 안에 기록 → 기본 처리 방식 결정에 사용
     info = ROOT / "build" / "build_info.json"
     info.parent.mkdir(parents=True, exist_ok=True)
-    info.write_text(json.dumps({"variant": variant}), encoding="utf-8")
+    info.write_text(json.dumps({"variant": variant, "edition": EDITION}), encoding="utf-8")
     env = dict(os.environ)
     if bundle_models:
         env["MS_BUNDLE_MODELS"] = str(Path(bundle_models).resolve())
@@ -118,7 +154,11 @@ def package_windows(variant: str, skip_installer: bool):
             print("!! Inno Setup(ISCC.exe)이 없어 설치 프로그램은 건너뜁니다. https://jrsoftware.org/isdl.php")
         else:
             run([iscc, f"/DAppVersion={__version__}", f"/DSourceDir={src}", f"/DVariant={variant}",
-                 f"/DOutputDir={RELEASE}", ROOT / "packaging" / "windows" / "installer.iss"])
+                 f"/DOutputDir={RELEASE}", f"/DAppName={APP_NAME}", f"/DAppShort={APP_SHORT}",
+                 f"/DExeName={EXE_NAME}", f"/DAppGuid={INSTALLER_IDS['inno_app_id']}",
+                 f"/DIconFile={ROOT / 'assets' / (ICON_STEM + '.ico')}",
+                 f"/DSettingsKey={INSTALLER_IDS['reg_settings']}",
+                 ROOT / "packaging" / "windows" / "installer.iss"])
             win_sign(sorted(RELEASE.glob(f"{EXE_NAME}-{__version__}-windows-x64-{variant}-setup*.exe")))
     build_msi(src, variant)
 
@@ -134,7 +174,13 @@ def build_msi(src: Path, variant: str):
     msi_dir = (ROOT / "packaging" / "windows" / "msi").resolve()
     args = [wix, "build", msi_dir / "MRMaker.wxs", "-arch", "x64", "-ext", "WixToolset.UI.wixext", "-culture", "ko-KR",
             "-d", f"Version={__version__}", "-d", f"SourceDir={src.resolve()}",
-            "-d", f"IconPath={(ROOT / 'assets' / 'icon.ico').resolve()}", "-d", f"AssetsDir={msi_dir}"]
+            "-d", f"IconPath={(ROOT / 'assets' / (ICON_STEM + '.ico')).resolve()}",
+            "-d", f"AssetsDir={msi_dir / INSTALLER_IDS['msi_assets'] if INSTALLER_IDS['msi_assets'] else msi_dir}",
+            "-d", f"AppName={APP_NAME}", "-d", f"AppShort={APP_SHORT}", "-d", f"ExeName={EXE_NAME}",
+            "-d", f"UpgradeCode={INSTALLER_IDS['msi_upgrade']}",
+            "-d", f"StartMenuGuid={INSTALLER_IDS['msi_startmenu']}",
+            "-d", f"DesktopGuid={INSTALLER_IDS['msi_desktop']}",
+            "-d", f"InstallerKey={INSTALLER_IDS['reg_installer']}"]
     size = sum(f.stat().st_size for f in src.rglob("*") if f.is_file())
     if size > 1800 * 1048576:     # 압축해도 2GB 를 넘을 수 있는 크기 → 외부 cab 으로 분할
         args += ["-d", "EmbedCab=no", "-d", "MediaSize=1800", "-d", f"CabPrefix={base}-", "-d", "Compression=medium"]
@@ -172,11 +218,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bundle-models", help="포함할 모델 폴더 (scripts/fetch_models.py 결과)")
     ap.add_argument("--variant", default=os.environ.get("MS_VARIANT", "cpu"), help="Windows: cpu / cuda")
+    ap.add_argument("--edition", default=EDITION, choices=["maker", "separator"],
+                    help="maker = MR MAKER (2-Stem, 기본) / separator = MR SEPARATOR (6-Stem)")
     ap.add_argument("--skip-installer", action="store_true")
     ap.add_argument("--skip-pyinstaller", action="store_true")
     ap.add_argument("--skip-rbshift", action="store_true", help="키 조절 도구 빌드 생략 (이미 빌드됨)")
     a = ap.parse_args()
     RELEASE.mkdir(parents=True, exist_ok=True)
+    print(f"edition: {EDITION} → {APP_NAME} ({EXE_NAME}, 설정 {SETTINGS_ID})", flush=True)
     if not a.skip_pyinstaller:
         if not a.skip_rbshift:
             build_rbshift()

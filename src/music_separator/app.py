@@ -10,13 +10,13 @@ from pathlib import Path
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
-from . import APP_ID, APP_NAME, ORG_NAME, __version__, paths  # noqa: E402
+from . import APP_NAME, EXE_NAME, ICON_STEM, LOG_NAME, ORG_NAME, SEPARATOR, SETTINGS_ID, __version__, paths  # noqa: E402
 
 log = logging.getLogger("music_separator")
 
 
 def setup_logging(verbose: bool = False) -> Path:
-    log_file = paths.logs_dir() / "music_separator.log"
+    log_file = paths.logs_dir() / LOG_NAME
     root = logging.getLogger()
     root.setLevel(logging.DEBUG if verbose else logging.INFO)
     fh = logging.handlers.RotatingFileHandler(log_file, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
@@ -34,12 +34,12 @@ def setup_logging(verbose: bool = False) -> Path:
 
 
 def parse_args(argv):
-    p = argparse.ArgumentParser(prog="MRMaker", description=f"{APP_NAME} {__version__}")
+    p = argparse.ArgumentParser(prog=EXE_NAME, description=f"{APP_NAME} {__version__}")
     p.add_argument("file", nargs="?", help="시작할 때 열 오디오 파일")
     p.add_argument("--selftest", action="store_true", help="헤드리스 자가 진단 실행 후 종료")
     p.add_argument("--report", help="자가 진단 결과 JSON 경로")
     p.add_argument("--model", help="자가 진단에 사용할 모델 (htdemucs, htdemucs_6s, demucs_unittest …)")
-    p.add_argument("--mode", default="2", choices=["2", "4", "6"])
+    p.add_argument("--mode", default="6" if SEPARATOR else "2", choices=["2", "4", "6"])
     p.add_argument("--device", default="auto", choices=["auto", "gpu", "cpu"])
     p.add_argument("--engine", default="auto", choices=["auto", "demucs", "roformer"])
     p.add_argument("--preset", default="quality", choices=["speed", "quality", "best"])
@@ -74,7 +74,7 @@ def main(argv=None) -> int:
     from PySide6.QtWidgets import QApplication
 
     QCoreApplication.setOrganizationName(ORG_NAME)
-    QCoreApplication.setApplicationName(APP_ID)
+    QCoreApplication.setApplicationName(SETTINGS_ID)
 
     class App(QApplication):
         def __init__(self, a):
@@ -95,7 +95,7 @@ def main(argv=None) -> int:
     app = App(sys.argv[:1])
     app.setApplicationDisplayName(APP_NAME)
     app.setApplicationVersion(__version__)
-    icon = paths.assets_dir() / "icon.png"
+    icon = paths.assets_dir() / f"{ICON_STEM}.png"
     if icon.exists():
         app.setWindowIcon(QIcon(str(icon)))
     from .ui import theme

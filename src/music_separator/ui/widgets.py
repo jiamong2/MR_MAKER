@@ -14,12 +14,14 @@ from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath
 from PySide6.QtWidgets import (QAbstractButton, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QMenu,
                                QPushButton, QSizePolicy, QSlider, QVBoxLayout, QWidget)
 
+from .. import SEPARATOR
 from . import icons, theme
 
 HEADER_WIDTH = 318      # 트랙 카드 열 너비
 COLUMN_GAP = 14
-ROW_HEIGHT = 96
-ROW_SPACING = 8
+COMPACT = SEPARATOR      # MR SEPARATOR: 원본 + 6개 트랙이 한 화면에 들어오도록 트랙 줄을 낮게
+ROW_HEIGHT = 82 if COMPACT else 96
+ROW_SPACING = 6 if COMPACT else 8
 
 
 class ElideLabel(QLabel):
@@ -713,19 +715,19 @@ class TrackCard(QFrame):
         self.reference = reference
         self.setFixedWidth(HEADER_WIDTH)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(12, 10, 14, 10)
+        lay.setContentsMargins(12, 5 if COMPACT else 10, 14, 5 if COMPACT else 10)
         lay.setSpacing(10)
 
         num = QLabel(str(number))
         num.setObjectName("TrackNum")
         num.setFixedWidth(14)
         num.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-        num.setContentsMargins(0, 10, 0, 0)
+        num.setContentsMargins(0, 8 if COMPACT else 10, 0, 0)
         lay.addWidget(num)
         lay.addWidget(IconTile(icon_name, color), 0, Qt.AlignmentFlag.AlignTop)
 
         col = QVBoxLayout()
-        col.setSpacing(6)
+        col.setSpacing(3 if COMPACT else 6)
         top = QHBoxLayout()
         names = QVBoxLayout()
         names.setSpacing(0)

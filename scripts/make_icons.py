@@ -17,15 +17,15 @@ from PySide6.QtGui import QColor, QGuiApplication, QImage, QPainter, QPainterPat
 ASSETS = Path(__file__).resolve().parents[1] / "assets"
 
 
-def draw_icon(size: int = 1024) -> QImage:
-    """앱 아이콘: 흰색 둥근 사각형 + 네잎클로버 (ui/clover.py 의 벡터 그림)."""
+def draw_icon(size: int = 1024, separated: bool = False) -> QImage:
+    """앱 아이콘: 흰색 둥근 사각형 + 네잎클로버 (ui/clover.py 의 벡터 그림). separated = MR SEPARATOR 용 색 잎."""
     sys.path.insert(0, str(ASSETS.parent / "src"))
     from music_separator.ui.clover import paint_app_icon
 
     img = QImage(size, size, QImage.Format.Format_ARGB32)
     img.fill(Qt.GlobalColor.transparent)
     p = QPainter(img)
-    paint_app_icon(p, size)
+    paint_app_icon(p, size, separated=separated)
     p.end()
     return img
 
@@ -60,10 +60,12 @@ def main():
     pixmap("chevron-down", "#8a93a5", 28, 1.0, 2.2).save(str(ASSETS / "chevron.png"))
     from PIL import Image
 
-    im = Image.open(png).convert("RGBA")
-    im.save(ASSETS / "icon.ico", sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
-    im.save(ASSETS / "icon.icns", sizes=[(16, 16), (32, 32), (64, 64), (128, 128), (256, 256), (512, 512),
-                                         (1024, 1024)])
+    draw_icon(1024, separated=True).save(str(ASSETS / "icon_separator.png"))      # MR SEPARATOR
+    for stem in ("icon", "icon_separator"):
+        im = Image.open(ASSETS / f"{stem}.png").convert("RGBA")
+        im.save(ASSETS / f"{stem}.ico", sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+        im.save(ASSETS / f"{stem}.icns", sizes=[(16, 16), (32, 32), (64, 64), (128, 128), (256, 256), (512, 512),
+                                                (1024, 1024)])
     print("written:", *sorted(p.name for p in ASSETS.iterdir()))
 
 

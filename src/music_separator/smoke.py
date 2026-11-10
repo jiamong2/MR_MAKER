@@ -19,7 +19,7 @@ from pathlib import Path
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
-from . import audio_io
+from . import SEPARATOR, audio_io
 from .selftest import make_test_signal
 
 log = logging.getLogger(__name__)
@@ -51,6 +51,13 @@ class GuiSmoke:
         audio_io.write_wav(src, make_test_signal(15.0, 48000) * 0.9, 24, 48000)
         self.src = src
         w = self.win
+        if SEPARATOR:                     # MR SEPARATOR: 홈 화면 없이 트랙 화면에서 바로
+            w.set_format("wav24")
+            w.open_file(src)
+            self._log(f"separator: open {src.name}")
+            self.step = "sep_load"
+            self.timer.start()
+            return
         w.show_home()
         w.home_set_file(src)
         w.home.set_target("mr")
@@ -93,6 +100,8 @@ class GuiSmoke:
             return self._finish(False, f"timeout at step {self.step}")
         if w.busy():
             return
+        if self.step.startswith("sep_"):
+            return self._poll_separator()
         if self.step == "home1":
             job = w.last_job
             if job is None:
@@ -176,4 +185,77 @@ class GuiSmoke:
                 self._log(f"tempo 90% export length {sec:.2f}s (want {want:.2f}s)")
                 if abs(sec - want) > 0.06:
                     return self._finish(False, f"tempo export length {sec:.2f}s != {want:.2f}s")
+            return self._finish(ok, "" if ok else "missing exports")
+
+    # ------------------------------------------------ MR SEPARATOR (6-Stem) ---
+    def _poll_separator(self):
+        w = self.win
+        want = ["vocals", "drums", "bass", "guitar", "piano", "other"]
+        if self.step == "sep_load":
+            if w.loaded is None:
+                return self._finish(False, f"file was not loaded: {w.last_error}")
+            if w.pages.currentIndex() != 1 or w.home_btn.isVisible():
+                return self._finish(False, "separator must open on the track view without a home button")
+            w.start_separation()
+            self.step = "sep_run"
+        elif self.step == "sep_run":
+            if w.result is None or [s.key for s in w.result.stems] != want:
+                return self._finish(False, f"6-stem result missing: {w.last_error}")
+            if list(w.chips) != want or not w.mix_save_btn.isEnabled():
+                return self._finish(False, "mix chips were not built")
+            self._log(f"separated: {list(w.rows)}")
+            w.chips["piano"].click()                       # 피아노 빼기 → 트랙 음소거와 동기화
+            if not w.mixer.track("piano").mute or w._mix_plan()[1] != ["piano"]:
+                return self._finish(False, f"chip did not mute the track: {w._mix_plan()}")
+            w.mixer.seek(int(w.mixer.length * 0.4))
+            block, _ = w.mixer.render(4096)
+            self._log(f"mixer render ok, peak={float(abs(block).max()):.3f}")
+            self._shot("-mix")
+            w.export_mix()
+            self.step = "sep_mix1"
+        elif self.step == "sep_mix1":
+            w.reset_mix()
+            w.rows["drums"].set_solo(True)
+            w.rows["bass"].set_solo(True)
+            w.rows["bass"].slider.setValue(70)
+            if w._mix_plan() != (["drums", "bass"], ["vocals", "guitar", "piano", "other"], {"bass": 0.7}):
+                return self._finish(False, f"solo/gain mix plan wrong: {w._mix_plan()}")
+            w.export_mix()
+            self.step = "sep_mix2"
+        elif self.step == "sep_mix2":
+            w.reset_mix()
+            w.set_format("flac")
+            w.export_all()
+            self.step = "sep_all"
+        elif self.step == "sep_all":
+            w.set_format("wav24")
+            w.key_slider.setValue(-3)
+            w.tempo_slider.setValue(90)
+            w._apply_key()
+            self.wait_t = time.monotonic()
+            self.step = "sep_key"
+        elif self.step == "sep_key":
+            if w.key_semitones != -3 or w.tempo_applied != 90:
+                if time.monotonic() - self.wait_t > 300:
+                    return self._finish(False, "key/tempo shift timeout")
+                return
+            sec = w.loaded.seconds / 0.9
+            if abs(w.mixer.duration - sec) > 0.05:
+                return self._finish(False, f"tempo 90% playback length {w.mixer.duration:.2f}s != {sec:.2f}s")
+            w.rows["piano"].set_solo(True)
+            w.export_mix()
+            self.step = "sep_done"
+        elif self.step == "sep_done":
+            files = self._outputs()
+            names = [f.name for f in files]
+            self._log(f"exported {len(files)} files: {names}")
+            shifted = [f for f in files if "피아노만" in f.name and "Key -3" in f.name and "Tempo 90%" in f.name]
+            ok = (sum(1 for f in files if f.suffix == ".flac") == 6 and any("믹스 (피아노 제외)" in n for n in names)
+                  and any("믹스 (드럼+베이스, 볼륨 조절)" in n for n in names) and len(shifted) == 1)
+            if ok:
+                sec = audio_io.probe_audio(shifted[0]).duration
+                want_sec = w.loaded.seconds / 0.9
+                if abs(sec - want_sec) > 0.06:
+                    return self._finish(False, f"tempo export length {sec:.2f}s != {want_sec:.2f}s")
+            self.step = "done"
             return self._finish(ok, "" if ok else "missing exports")

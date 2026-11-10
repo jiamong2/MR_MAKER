@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from . import __version__
+from . import APP_SHORT, EXE_NAME, __version__
 
 log = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ def installed_windows() -> bool:
     return any(Path(sys.executable).parent.glob("unins*.exe"))
 
 
-MSI_DIR_NAME = "MR MAKER (MSI)"     # packaging/windows/msi/MRMaker.wxs 의 INSTALLFOLDER 이름
+MSI_DIR_NAME = f"{APP_SHORT} (MSI)"     # packaging/windows/msi/MRMaker.wxs 의 INSTALLFOLDER 이름
 
 
 def installed_msi() -> bool:
@@ -74,7 +74,7 @@ def pick_assets(release: dict, version: str, variant: str, msi: bool = False) ->
     """현재 설치 종류에 맞는 Windows 설치 파일 선택 (setup.exe + 분할 .bin, 또는 .msi)."""
     if msi:
         # .msi (+ 2GB 를 넘는 CUDA 버전은 같은 폴더에 둘 외부 .cab 들)
-        base = f"MRMaker-{version}-windows-x64-{variant}"
+        base = f"{EXE_NAME}-{version}-windows-x64-{variant}"
         out = [Asset(a["name"], a["browser_download_url"], int(a.get("size", 0)))
                for a in release.get("assets", [])
                if a.get("name") == f"{base}.msi" or (a.get("name", "").startswith(f"{base}-")
@@ -82,7 +82,7 @@ def pick_assets(release: dict, version: str, variant: str, msi: bool = False) ->
         if not any(x.name.endswith(".msi") for x in out):
             return []
         return sorted(out, key=lambda x: (not x.name.endswith(".msi"), x.name))
-    prefix = f"MRMaker-{version}-windows-x64-{variant}-setup"
+    prefix = f"{EXE_NAME}-{version}-windows-x64-{variant}-setup"
     out = []
     for a in release.get("assets", []):
         name = a.get("name", "")
@@ -99,6 +99,11 @@ def parse_release(release: dict, variant: str, auto: bool, msi: bool = False) ->
     ver = str(release.get("tag_name", "")).lstrip("vV")
     if not ver or not is_newer(ver):
         return None
+    # 한 릴리스에 두 프로그램(MR MAKER / MR SEPARATOR)의 파일이 함께 올라간다. 이 프로그램의 파일이 없는
+    # 릴리스(다른 프로그램만 올린 경우)는 새 버전으로 알리지 않는다.
+    names = [str(a.get("name", "")) for a in release.get("assets", [])]
+    if names and not any(n.startswith(f"{EXE_NAME}-") for n in names):
+        return None
     assets = pick_assets(release, ver, variant, msi) if auto else []
     return UpdateInfo(ver, release.get("html_url") or RELEASES_PAGE, assets)
 
@@ -106,7 +111,7 @@ def parse_release(release: dict, variant: str, auto: bool, msi: bool = False) ->
 def _urlopen(url: str, timeout: float):
     from .models import _ssl_context
 
-    req = urllib.request.Request(url, headers={"User-Agent": f"MRMaker/{__version__}",
+    req = urllib.request.Request(url, headers={"User-Agent": f"{EXE_NAME}/{__version__}",
                                                "Accept": "application/vnd.github+json"})
     return urllib.request.urlopen(req, timeout=timeout, context=_ssl_context())
 
@@ -127,7 +132,7 @@ ProgressCb = Callable[[int, int], None]
 def download(info: UpdateInfo, progress: Optional[ProgressCb] = None,
              cancel: Optional[threading.Event] = None) -> Path:
     """설치 파일들을 임시 폴더에 내려받고 setup.exe 경로를 돌려준다."""
-    dest = Path(tempfile.mkdtemp(prefix="MRMaker-update-"))
+    dest = Path(tempfile.mkdtemp(prefix=f"{EXE_NAME}-update-"))
     total = sum(a.size for a in info.assets) or 1
     done = 0
     for a in info.assets:

@@ -10,6 +10,8 @@ LEAF_LIGHT = QColor("#4b7a59")
 LEAF_MID = QColor("#30503f")
 LEAF_DARK = QColor("#1c2a25")
 STEM = QColor("#1f2d28")
+# MR SEPARATOR: 잎마다 다른 색(트랙 색 — 보컬·드럼·피아노·기타)으로, 잎 사이를 조금 더 띄워 '나뉜' 느낌
+SEPARATOR_LEAVES = {225: "#e9a23b", 315: "#3f8fe0", 135: "#e0608f", 45: "#34a876"}
 
 
 def _heart(L: float, width: float = 0.90) -> QPainterPath:
@@ -30,15 +32,18 @@ def _heart(L: float, width: float = 0.90) -> QPainterPath:
     return p
 
 
-def paint_clover(p: QPainter, rect: QRectF, shadow: bool = True) -> None:
-    """rect 안에 클로버를 그림 (원본 이미지와 같은 배치: 대각선 4잎 + 아래로 휜 줄기)."""
+def paint_clover(p: QPainter, rect: QRectF, shadow: bool = True, separated: bool | None = None) -> None:
+    """rect 안에 클로버를 그림 (원본 이미지와 같은 배치: 대각선 4잎 + 아래로 휜 줄기).
+    separated: 잎마다 다른 색 (MR SEPARATOR 로고). None 이면 실행 중인 프로그램에 맞춤."""
+    if separated is None:
+        from .. import SEPARATOR as separated
     p.save()
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     side = min(rect.width(), rect.height())
     cx = rect.center().x() - side * 0.01
     cy = rect.top() + side * 0.47
     L = side * 0.52
-    gap = side * 0.010
+    gap = side * (0.030 if separated else 0.010)
     # 전체에 왼쪽 위(밝음) → 오른쪽 아래(어두움) 그라데이션
     g = QLinearGradient(QPointF(cx - side * 0.45, cy - side * 0.45), QPointF(cx + side * 0.45, cy + side * 0.45))
     g.setColorAt(0.0, LEAF_LIGHT)
@@ -52,6 +57,12 @@ def paint_clover(p: QPainter, rect: QRectF, shadow: bool = True) -> None:
         t = QTransform()
         t.translate(cx + math.cos(rad) * gap, cy + math.sin(rad) * gap)
         t.rotate(ang - 90)
+        if separated:
+            c = QColor(SEPARATOR_LEAVES[ang])
+            lg = QLinearGradient(QPointF(cx - side * 0.45, cy - side * 0.45), QPointF(cx + side * 0.45, cy + side * 0.45))
+            lg.setColorAt(0.0, c.lighter(118))
+            lg.setColorAt(1.0, c.darker(128))
+            p.setBrush(lg)
         p.drawPath(t.map(heart))
     if shadow:   # 잎 위에 은은한 빛
         hl = QRadialGradient(QPointF(cx - side * 0.2, cy - side * 0.22), side * 0.42)
@@ -76,7 +87,7 @@ def paint_clover(p: QPainter, rect: QRectF, shadow: bool = True) -> None:
     p.restore()
 
 
-def paint_app_icon(p: QPainter, size: int) -> None:
+def paint_app_icon(p: QPainter, size: int, separated: bool | None = None) -> None:
     """앱 아이콘: 흰색 둥근 사각형 위 클로버."""
     p.save()
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -90,5 +101,6 @@ def paint_app_icon(p: QPainter, size: int) -> None:
     p.fillPath(path, g)
     p.setPen(QPen(QColor(20, 50, 35, 40), max(1.0, size * 0.006)))
     p.drawPath(path)
-    paint_clover(p, r.adjusted(r.width() * 0.14, r.height() * 0.12, -r.width() * 0.14, -r.height() * 0.16))
+    paint_clover(p, r.adjusted(r.width() * 0.14, r.height() * 0.12, -r.width() * 0.14, -r.height() * 0.16),
+                 separated=separated)
     p.restore()

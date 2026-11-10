@@ -18,7 +18,9 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 ROOT = Path(SPECPATH).resolve().parent  # noqa: F821 (SPECPATH 는 PyInstaller 제공)
 sys.path.insert(0, str(ROOT / "src"))
-from music_separator import APP_NAME, APP_SHORT, BUNDLE_ID, EXE_NAME, __version__  # noqa: E402
+from music_separator import APP_NAME, APP_SHORT, BUNDLE_ID, EDITION, EXE_NAME, ICON_STEM, __version__  # noqa: E402
+
+print(f"[spec] edition={EDITION} name={APP_NAME} exe={EXE_NAME}")
 
 IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
@@ -92,7 +94,7 @@ a = Analysis(  # noqa: F821
 pyz = PYZ(a.pure)  # noqa: F821
 
 exe_name = EXE_NAME
-icon = str(ROOT / "assets" / ("icon.ico" if IS_WIN else "icon.icns" if IS_MAC else "icon.png"))
+icon = str(ROOT / "assets" / (ICON_STEM + (".ico" if IS_WIN else ".icns" if IS_MAC else ".png")))
 
 version_file = None
 if IS_WIN:

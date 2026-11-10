@@ -1,5 +1,6 @@
-; MR MAKER for ui.clover - Windows 설치 프로그램 (Inno Setup 6)
+; MR MAKER / MR SEPARATOR for ui.clover - Windows 설치 프로그램 (Inno Setup 6)
 ; 빌드: iscc /DAppVersion=1.0.0 /DSourceDir=..\..\dist\MRMaker /DVariant=cpu /DOutputDir=..\..\dist\release installer.iss
+; MR SEPARATOR 는 scripts/build.py --edition separator 가 AppName · ExeName · AppGuid 등을 /D 로 넘겨 같은 파일로 만든다.
 
 #ifndef AppVersion
   #define AppVersion "1.0.0"
@@ -14,12 +15,31 @@
   #define Variant "cpu"
 #endif
 
-#define AppName "MR MAKER for ui.clover"
-#define AppExe "MRMaker.exe"
+#ifndef AppName
+  #define AppName "MR MAKER for ui.clover"
+#endif
+#ifndef AppShort
+  #define AppShort "MR MAKER"
+#endif
+#ifndef ExeName
+  #define ExeName "MRMaker"
+#endif
+; 설치 식별자 — 프로그램마다 달라야 함께 설치할 수 있고, 같은 프로그램은 버전이 바뀌어도 같아야 업그레이드됨
+#ifndef AppGuid
+  #define AppGuid "6B0E4C1A-3B7D-4F8E-9C2A-7D51E0A9F3B4"
+#endif
+#ifndef IconFile
+  #define IconFile "..\..\assets\icon.ico"
+#endif
+; 삭제할 때 함께 지울 프로그램 설정 (HKCU)
+#ifndef SettingsKey
+  #define SettingsKey "Software\MusicSeparator"
+#endif
+#define AppExe ExeName + ".exe"
 #define KoreanIsl AddBackslash(CompilerPath) + "Languages\Korean.isl"
 
 [Setup]
-AppId={{6B0E4C1A-3B7D-4F8E-9C2A-7D51E0A9F3B4}
+AppId={{{#AppGuid}}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
@@ -34,8 +54,8 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.17763
 OutputDir={#OutputDir}
-OutputBaseFilename=MRMaker-{#AppVersion}-windows-x64-{#Variant}-setup
-SetupIconFile=..\..\assets\icon.ico
+OutputBaseFilename={#ExeName}-{#AppVersion}-windows-x64-{#Variant}-setup
+SetupIconFile={#IconFile}
 UninstallDisplayIcon={app}\{#AppExe}
 Compression=lzma2/ultra64
 SolidCompression=yes
@@ -77,7 +97,7 @@ Filename: "{app}\{#AppExe}"; Flags: nowait runasoriginaluser; Check: ShouldRelau
 
 [Registry]
 ; 프로그램 설정(HKCU\Software\MusicSeparator)은 삭제할 때 함께 지움. 업데이트(덮어쓰기 설치)에서는 유지됨
-Root: HKCU; Subkey: "Software\MusicSeparator"; Flags: uninsdeletekey dontcreatekey
+Root: HKCU; Subkey: "{#SettingsKey}"; Flags: uninsdeletekey dontcreatekey
 
 [UninstallDelete]
 ; 임시 캐시는 삭제. 다운로드한 AI 모델(%LOCALAPPDATA%\MusicSeparator\models)은 재설치를 위해 유지
@@ -89,7 +109,7 @@ function InstalledVersion(var Ver: String): Boolean;
 var
   Key: String;
 begin
-  Key := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{6B0E4C1A-3B7D-4F8E-9C2A-7D51E0A9F3B4}_is1';
+  Key := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{' + '{#AppGuid}' + '}_is1';
   Result := RegQueryStringValue(HKCU, Key, 'DisplayVersion', Ver) or
             RegQueryStringValue(HKLM64, Key, 'DisplayVersion', Ver) or
             RegQueryStringValue(HKLM32, Key, 'DisplayVersion', Ver);
@@ -105,7 +125,7 @@ begin
      (ComparePackedVersion(A, B) > 0) then
   begin
     if not WizardSilent then
-      MsgBox('이미 더 최신 버전(' + Ver + ')의 MR MAKER가 설치되어 있어 이전 버전({#AppVersion})은 설치하지 않습니다.',
+      MsgBox('이미 더 최신 버전(' + Ver + ')의 {#AppShort}가 설치되어 있어 이전 버전({#AppVersion})은 설치하지 않습니다.',
              mbInformation, MB_OK);
     Result := False;
   end;
