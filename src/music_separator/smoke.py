@@ -3,7 +3,7 @@
 실제 메인 윈도우를 띄워
   1) 홈 화면: 파일 입력 → 반주(MR) + 키 +2 → [음원 추출 시작] → 결과 확인
   2) 홈 화면: 같은 입력으로 보컬만 · MP3 (분리 결과 재사용)
-  3) 고급 옵션: 트랙 재생 조작 → 전체 트랙 저장 → 가이드 보컬 MR 저장 → 키 변경 후 보컬 저장
+  3) 고급 옵션: 트랙 재생 조작 → 트랙 저장(전체) → 가이드 보컬 MR 저장 → 키 변경 후 보컬 저장
 을 자동으로 수행하고 두 화면을 PNG 로 저장한 뒤 종료합니다. (CI 에서 빌드된 실행 파일의 GUI 동작 확인용)
 기본은 초소형 테스트 모델(demucs_unittest)을 사용하며 MUSIC_SEPARATOR_FORCE_MODEL 로 바꿀 수 있습니다.
 """
@@ -144,8 +144,10 @@ class GuiSmoke:
             block, _ = w.mixer.render(4096)
             self._log(f"mixer render ok, peak={float(abs(block).max()):.3f}")
             w.rows["vocals"].set_solo(False)
+            if w.audible_stems() != ["vocals", "instrumental"]:
+                return self._finish(False, f"audible stems wrong: {w.audible_stems()}")
             w.set_format("flac")
-            w.export_all()
+            w.export_tracks()                              # 아무것도 끄지 않았으면 보컬 · 반주 둘 다
             self.step = "export_all"
         elif self.step == "export_all":
             w.guide_box.setChecked(True)
@@ -213,7 +215,7 @@ class GuiSmoke:
             if any(t.mute for t in w.mixer.tracks if t.key != "original"):
                 return self._finish(False, "reset did not unmute the tracks")
             w.set_format("flac")
-            w.export_all()
+            w.export_tracks()                              # 아무것도 끄지 않았으면 6개 전부
             self.step = "sep_all"
         elif self.step == "sep_all":
             w.set_format("wav24")
@@ -230,9 +232,10 @@ class GuiSmoke:
             sec = w.loaded.seconds / 0.9
             if abs(w.mixer.duration - sec) > 0.05:
                 return self._finish(False, f"tempo 90% playback length {w.mixer.duration:.2f}s != {sec:.2f}s")
-            for k in want:                                 # 피아노 트랙만 골라 저장
-                w.rows[k].card.toggle.setChecked(k == "piano")
-            w.export_selected()
+            w.rows["piano"].set_solo(True)                 # 피아노만 듣는 상태 → [트랙 저장] = 피아노 하나
+            if w.audible_stems() != ["piano"]:
+                return self._finish(False, f"audible stems wrong: {w.audible_stems()}")
+            w.export_tracks()
             self.step = "sep_done"
         elif self.step == "sep_done":
             files = self._outputs()

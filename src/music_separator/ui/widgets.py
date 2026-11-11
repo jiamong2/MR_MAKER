@@ -704,7 +704,6 @@ class TrackCard(QFrame):
     muteChanged = Signal(str, bool)
     soloChanged = Signal(str, bool)
     gainChanged = Signal(str, float)
-    selectedChanged = Signal(str, bool)
 
     def __init__(self, key: str, number: int, name: str, sub: str, color: str, icon_name: str,
                  reference: bool = False, parent=None):
@@ -738,15 +737,7 @@ class TrackCard(QFrame):
         names.addWidget(self.name_lbl)
         names.addWidget(sub_lbl)
         top.addLayout(names, 1)
-        self.toggle = ToggleSwitch()
-        self.toggle.setChecked(not reference)
-        if reference:
-            self.toggle.setEnabled(False)
-            self.toggle.setToolTip("원본은 저장 대상이 아닙니다")
-        else:
-            self.toggle.setToolTip("켜면 '선택한 트랙 저장'에 포함됩니다")
-        self.toggle.toggled.connect(lambda v: self.selectedChanged.emit(self.key, v))
-        top.addWidget(self.toggle, 0, Qt.AlignmentFlag.AlignTop)
+        # (저장 스위치 없음: [트랙 저장]은 M · S 로 지금 들리게 해 둔 트랙을 저장)
         col.addLayout(top)
 
         ctl = QHBoxLayout()
@@ -804,9 +795,6 @@ class TrackCard(QFrame):
     def gain(self) -> float:
         return self.slider.value() / 100.0
 
-    @property
-    def selected(self) -> bool:
-        return self.toggle.isChecked() and not self.reference
 
 
 class TrackRow(QWidget):
@@ -815,7 +803,6 @@ class TrackRow(QWidget):
     muteChanged = Signal(str, bool)
     soloChanged = Signal(str, bool)
     gainChanged = Signal(str, float)
-    selectedChanged = Signal(str, bool)
     seekRequested = Signal(float)
 
     def __init__(self, viewport: Viewport, key: str, number: int, name: str, sub: str, color: str,
@@ -835,7 +822,6 @@ class TrackRow(QWidget):
         self.card.muteChanged.connect(self.muteChanged)
         self.card.soloChanged.connect(self.soloChanged)
         self.card.gainChanged.connect(self.gainChanged)
-        self.card.selectedChanged.connect(self.selectedChanged)
         self.wave.seekRequested.connect(self.seekRequested)
 
     # 편의 접근자
@@ -851,10 +837,6 @@ class TrackRow(QWidget):
     @property
     def gain(self) -> float:
         return self.card.gain
-
-    @property
-    def selected(self) -> bool:
-        return self.card.selected
 
     @property
     def slider(self) -> QSlider:

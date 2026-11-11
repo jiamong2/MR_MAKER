@@ -399,9 +399,7 @@ class MainWindow(QMainWindow):
         self.yt_btn = text_button("YouTube", "link", None, 46, theme.TEXT_DIM)
         self.yt_btn.setToolTip("YouTube 영상 주소로 오디오 불러오기")
         self.yt_btn.clicked.connect(self.open_youtube)
-        if not SEPARATOR:                  # MR SEPARATOR 는 왼쪽 '1 곡 불러오기' 카드에 둠
-            lay.addWidget(self.open_btn)
-            lay.addWidget(self.yt_btn)
+        # [파일 열기] · [YouTube] 는 왼쪽 '1 곡 불러오기 · AI 분리' 카드에 둠
         self.more_btn = icon_button("dots", "메뉴", 46, 20)
         lay.addWidget(self.more_btn)
         return bar
@@ -418,16 +416,15 @@ class MainWindow(QMainWindow):
         lay = QVBoxLayout(panel)
         lay.setContentsMargins(0, 0, 12, 0)
         lay.setSpacing(16)
-        # MR SEPARATOR 순서: 1 곡 불러오기 · 2 키 · 3 템포 · 4 AI 음원 분리 / MR MAKER: 1 분리 · 2 MR 저장 · 3 키 · 4 템포
+        # MR SEPARATOR: 1 곡 불러오기·AI 분리 · 2 키 · 3 템포 · 4 AI 모델
+        # MR MAKER    : 1 곡 불러오기·AI 분리 · 2 MR·보컬 저장 · 3 키 · 4 템포 · 5 AI 모델
         cards: dict[str, QWidget] = {}
-        if SEPARATOR:
-            cards["source"] = self._build_source_card()
 
         # ---- 1. 분리 ----
         if SEPARATOR:
-            c, cl = card("4", "AI 음원 분리 · 6-Stem", "VOCALS / DRUMS / BASS / GUITAR / PIANO / OTHER")
+            c, cl = card("4", "AI 모델 · 6-Stem", "VOCALS / DRUMS / BASS / GUITAR / PIANO / OTHER")
         else:
-            c, cl = card("1", "AI 음원 분리 · 2-Stem", "VOCALS / INSTRUMENTAL")
+            c, cl = card("5", "AI 모델 · 2-Stem", "VOCALS / INSTRUMENTAL")
         info = QFrame()
         info.setObjectName("InfoBox")
         il = QVBoxLayout(info)
@@ -483,15 +480,20 @@ class MainWindow(QMainWindow):
         self.device_hint = label("처리 장치를 확인하는 중…", "dim", wrap=True)
         cl.addWidget(self.device_hint)
 
+        # 분리 실행 (버튼 · 진행률 · 취소 · 안내) 은 '1 곡 불러오기 · AI 분리' 카드에 둔다.
+        self.run_box = QWidget()
+        rl = QVBoxLayout(self.run_box)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(14)
         self.start_btn = text_button("AI 분리 시작", "sparkles", "primary", 48)
         self.start_btn.clicked.connect(self.start_separation)
         glow(self.start_btn, theme.ACCENT, 20, 60, 3)
-        cl.addWidget(self.start_btn)
+        rl.addWidget(self.start_btn)
         self.progress = QProgressBar()
         self.progress.setRange(0, 1000)
         self.progress.setFixedHeight(8)
         self.progress.hide()
-        cl.addWidget(self.progress)
+        rl.addWidget(self.progress)
         prow = QHBoxLayout()
         self.progress_lbl = label("", "dim", wrap=True)
         self.progress_lbl.hide()
@@ -500,14 +502,15 @@ class MainWindow(QMainWindow):
         self.cancel_btn.hide()
         prow.addWidget(self.progress_lbl, 1)
         prow.addWidget(self.cancel_btn, 0, Qt.AlignmentFlag.AlignTop)
-        cl.addLayout(prow)
+        rl.addLayout(prow)
         self.notice_lbl = QLabel("")
         self.notice_lbl.setWordWrap(True)
         self.notice_lbl.setStyleSheet("background:#fff7ec; border:1px solid #f5d2a6; border-radius:10px;"
                                       " padding:8px 10px; color:#9a5a12; font-size:12px;")
         self.notice_lbl.hide()
-        cl.addWidget(self.notice_lbl)
+        rl.addWidget(self.notice_lbl)
         cards["sep"] = c
+        cards["source"] = self._build_source_card()
 
         # ---- 2. MR / 보컬 저장 ----
         c, cl = card("2", "MR(반주) · 보컬 저장", "EXPORT")
@@ -694,7 +697,7 @@ class MainWindow(QMainWindow):
                                 "참고값이라 실제와 다를 수 있으니, 알고 있으면 직접 고쳐 넣으세요.", "faint", wrap=True)
         cl.addWidget(self.tempo_hint)
         cards["tempo"] = c
-        order = ("source", "key", "tempo", "sep", "mr") if SEPARATOR else ("sep", "mr", "key", "tempo")
+        order = ("source", "key", "tempo", "sep", "mr") if SEPARATOR else ("source", "mr", "key", "tempo", "sep")
         for k in order:
             lay.addWidget(cards[k])
         self._show_bpm(0.0)
@@ -703,8 +706,9 @@ class MainWindow(QMainWindow):
         return scroll
 
     def _build_source_card(self) -> QWidget:
-        """MR SEPARATOR: 1 곡 불러오기 (화면 위에 있던 [파일 열기] · [YouTube] 를 옮김)."""
-        c, cl = card("1", "곡 불러오기", "FILE / YOUTUBE")
+        """1 곡 불러오기 · AI 분리: [파일 열기] · [YouTube] + [AI 분리 시작] · 진행률."""
+        c, cl = card("1", "곡 불러오기 · AI 분리",
+                     "FILE / YOUTUBE → 6 STEMS" if SEPARATOR else "FILE / YOUTUBE → VOCALS / MR")
         self.source_lbl = label("음원 파일을 창에 끌어다 놓거나 아래 버튼으로 불러오세요.", "dim", wrap=True)
         cl.addWidget(self.source_lbl)
         row = QHBoxLayout()
@@ -713,6 +717,7 @@ class MainWindow(QMainWindow):
         row.addWidget(self.open_btn, 1)
         row.addWidget(self.yt_btn, 1)
         cl.addLayout(row)
+        cl.addWidget(self.run_box)          # [AI 분리 시작] · 진행률 (처리 방식·장치는 ④ AI 모델 카드)
         return c
 
     def _build_tracks_panel(self) -> QWidget:
@@ -817,14 +822,13 @@ class MainWindow(QMainWindow):
             self.fmt_combo.addItem(lbl, key)
         self.fmt_combo.setMinimumWidth(150)
         self.fmt_combo.setToolTip("저장 파일 형식")
-        self.export_sel_btn = text_button("선택한 트랙 저장", "save-multi", None, 44)
-        self.export_sel_btn.setToolTip("트랙 카드의 스위치가 켜진 트랙을 각각 파일로 저장합니다.\n"
-                                       "개별 트랙은 볼륨 슬라이더와 관계없이 원래 음량으로 저장됩니다.")
-        self.export_sel_btn.clicked.connect(self.export_selected)
-        self.export_all_btn = text_button("전체 트랙 저장", "download", "primary", 44)
-        self.export_all_btn.clicked.connect(self.export_all)
-        glow(self.export_all_btn, theme.ACCENT, 22, 100, 3)
-        for w in (self.settings_btn, self.folder_btn, self.fmt_combo, self.export_sel_btn, self.export_all_btn):
+        self.export_btn = text_button("트랙 저장", "download", "primary", 44)
+        self.export_btn.setMinimumWidth(130)
+        self.export_btn.setToolTip("지금 들리는 트랙(M 으로 끄지 않은 트랙, S 를 켰다면 S 트랙)을 각각 파일로 저장합니다.\n"
+                                   "트랙마다 원래 음량으로 저장되고(볼륨 슬라이더는 듣기용), 원본 트랙은 저장하지 않습니다.")
+        self.export_btn.clicked.connect(self.export_tracks)
+        glow(self.export_btn, theme.ACCENT, 22, 100, 3)
+        for w in (self.settings_btn, self.folder_btn, self.fmt_combo, self.export_btn):
             lay.addWidget(w)
         return bar
 
@@ -975,8 +979,7 @@ class MainWindow(QMainWindow):
         for b in self.preset_btns.values():
             b.setEnabled(not busy)
         self.device_combo.setEnabled(not busy)
-        for w in (self.mr_preview_btn, self.mr_save_btn, self.vocal_save_btn, self.export_sel_btn,
-                  self.export_all_btn):
+        for w in (self.mr_preview_btn, self.mr_save_btn, self.vocal_save_btn, self.export_btn):
             w.setEnabled(has_result and not busy)
         for w in (self.play_btn, self.stop_btn, self.rew_btn, self.seek):
             w.setEnabled(has_file)
@@ -1115,12 +1118,8 @@ class MainWindow(QMainWindow):
         fm = self.file_title.fontMetrics()
         rate = f" · {la.native_rate / 1000:g}kHz"
         self.file_title.setText(fm.elidedText(la.source.name, Qt.TextElideMode.ElideMiddle, 300 - fm.horizontalAdvance(rate)) + rate)
-        if SEPARATOR:
-            self.source_lbl.setText(f"{la.source.name}  ·  {audio_io.format_time(la.seconds)}\n"
-                                    "다른 곡은 창에 끌어다 놓거나 아래 버튼으로 불러오세요.")
-            # 다음 할 일([AI 분리 시작], 맨 아래 카드)이 보이도록 왼쪽 패널을 내림
-            QTimer.singleShot(0, lambda: self.findChild(QScrollArea, "LeftScroll").ensureWidgetVisible(
-                self.start_btn, 0, 60))
+        self.source_lbl.setText(f"{la.source.name}  ·  {audio_io.format_time(la.seconds)}\n"
+                                "다른 곡은 창에 끌어다 놓거나 아래 버튼으로 불러오세요.")
         self.file_title.setToolTip(str(la.source))
         self.lcd.len_lbl.setText(audio_io.format_time(la.seconds))
         self.ruler.set_duration(la.seconds)
@@ -1136,7 +1135,7 @@ class MainWindow(QMainWindow):
         self._reset_tempo()
         self._start_bpm(la)
         self.set_status(f"{la.source.name} ({audio_io.format_time(la.seconds)}) — "
-                        + ("" if SEPARATOR else "모드를 고르고 ") + "[AI 분리 시작]을 누르세요.")
+                        + "[AI 분리 시작]을 누르세요.")
         self._set_state()
 
     def _on_load_failed(self, msg: str):
@@ -1520,16 +1519,31 @@ class MainWindow(QMainWindow):
             jobs.append(ExportJob(path, fmt, self._label(k), "stem", key=k))
         return jobs
 
-    def export_selected(self):
+    def audible_stems(self) -> list[str]:
+        """지금 들리는 분리 트랙 (M · S 반영, 원본 참고 트랙 제외)."""
+        if self.result is None:
+            return []
+        tracks = {t.key: t for t in self.mixer.tracks}
+        keys = [s.key for s in self.result.stems if s.key in tracks]
+        if any(t.solo for t in tracks.values()):        # 솔로가 하나라도 있으면 (원본 포함) 솔로 트랙만 들림
+            return [k for k in keys if tracks[k].solo]
+        return [k for k in keys if not tracks[k].mute]
+
+    def export_tracks(self):
+        """[트랙 저장]: 지금 들리는 트랙을 각각 파일로 (볼륨은 듣기용이라 원래 음량으로 저장)."""
         if self.result is None:
             return
-        keys = [s.key for s in self.result.stems if self.rows[s.key].selected]
+        keys = self.audible_stems()
         if not keys:
-            self._error("저장할 트랙의 스위치를 켜 주세요.")
+            orig = self._track("original")
+            self._error("저장할 트랙이 없습니다. 원본 트랙은 비교용이라 저장하지 않습니다.\n"
+                        "저장할 트랙의 M 을 끄거나 S 를 켜 주세요." if orig is not None and orig.solo else
+                        "저장할 트랙이 없습니다. 저장할 트랙의 M(음소거)을 꺼 주세요.")
             return
         self._run_export(self._stem_jobs(keys))
 
     def export_all(self):
+        """모든 분리 트랙 저장 (자동 테스트용)."""
         if self.result is None:
             return
         self._run_export(self._stem_jobs([s.key for s in self.result.stems]))
@@ -2563,11 +2577,13 @@ HELP_TEXT = """[홈 화면 — 원클릭]
    • YouTube 는 권리가 있는 영상만 사용하세요.
 
 [고급 옵션]
-• 처리 방식: 속도 우선(Demucs) / 품질 우선(BS-RoFormer) / 최고 품질(겹침 4배)
+• 왼쪽 ① 곡 불러오기 · AI 분리: [파일 열기] · [YouTube] → [AI 분리 시작]
+• ② MR 저장(가이드 보컬 작게 남기기 가능) · 보컬만 저장
+• ③ 키 조절과 '보컬 음색(포먼트) 유지' — 보컬 결과물에만 적용 · ④ 템포 조절
+• ⑤ AI 모델: 처리 방식 — 속도 우선(Demucs) / 품질 우선(BS-RoFormer) / 최고 품질(겹침 4배), 처리 장치
   기본값: CPU 버전 = 속도 우선, CUDA 버전·Apple Silicon Mac = 품질 우선
-• AI 모델·처리 장치 선택, 트랙별 재생(M 음소거 · S 솔로 · 볼륨), 파형 확대
-• MR 저장(가이드 보컬 작게 남기기 가능) · 보컬만 저장 · 선택/전체 트랙 저장
-• 키 조절과 '보컬 음색(포먼트) 유지' — 보컬 결과물에만 적용
+• 오른쪽 트랙: M 음소거 · S 솔로 · 볼륨, 파형 확대
+• [트랙 저장]: 지금 들리는 트랙(M 으로 끄지 않은 트랙, S 를 켰다면 S 트랙)을 각각 파일로 저장
 
 • NVIDIA GPU 또는 Apple Silicon Mac에서는 GPU로 훨씬 빠르게 처리됩니다.
 • GPU에서 문제가 생기면 자동으로 CPU로 다시 처리합니다.
@@ -2575,9 +2591,10 @@ HELP_TEXT = """[홈 화면 — 원클릭]
 
 
 HELP_TEXT_6 = """[기본 흐름]
-1. 왼쪽 ① [파일 열기] · [YouTube], 또는 창에 음원 파일을 끌어다 놓습니다.
-2. 필요하면 ② 키 · ③ 템포를 맞춥니다 (분리 전·후 언제든 바꿀 수 있어요).
-3. ④ [AI 분리 시작] → 보컬 · 드럼 · 베이스 · 기타 · 피아노 · 나머지 악기 6개 트랙으로 나뉩니다.
+1. 왼쪽 ① 카드의 [파일 열기] · [YouTube], 또는 창에 음원 파일을 끌어다 놓습니다.
+2. ① 카드의 [AI 분리 시작] → 보컬 · 드럼 · 베이스 · 기타 · 피아노 · 나머지 악기 6개 트랙으로 나뉩니다.
+   (처리 방식·처리 장치는 맨 아래 ④ AI 모델 카드에서 고릅니다)
+3. 필요하면 ② 키 · ③ 템포를 맞춥니다 (분리 전·후 언제든 바꿀 수 있어요).
 4. ▶ 재생(Space)하면서 오른쪽 트랙을 켜고 끄며 듣습니다.
 
 [골라 듣기 — 오른쪽 트랙]
@@ -2588,8 +2605,10 @@ HELP_TEXT_6 = """[기본 흐름]
 • '원본' 트랙은 비교용입니다. 분리 후에는 꺼져 있고, S 를 누르면 원곡 그대로 들립니다.
 
 [저장]
-• [선택한 트랙 저장]: 트랙 카드 오른쪽 위 스위치가 켜진 트랙을 각각 파일로 저장합니다.
-• [전체 트랙 저장]: 6개 트랙을 각각 파일로 저장합니다 (DAW 로 가져갈 때).
+• [트랙 저장]: 지금 들리는 트랙을 각각 파일로 저장합니다.
+  - 아무것도 안 건드리면 6개 트랙 전부 (DAW 로 가져갈 때)
+  - 피아노 S 만 켜면 피아노 트랙 하나 / 피아노 M 만 켜면 피아노를 뺀 5개 트랙
+• 볼륨 슬라이더는 듣기용이라, 저장되는 트랙은 원래 음량입니다. 원본 트랙은 저장하지 않습니다.
 • 저장 형식·위치는 아래 막대와 [설정]에서 바꿉니다 (기본 WAV 24-bit).
 
 [키 · 템포]

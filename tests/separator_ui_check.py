@@ -74,7 +74,8 @@ if MODE == "6":
                            l.property("role") == "cardTitle"][:2])
     out["left"] = titles
     assert [t[0] for t in titles] == ["1", "2", "3", "4"], titles
-    assert "곡 불러오기" in titles[0][1] and "키" in titles[1][1] and "템포" in titles[2][1] and "AI 음원 분리" in titles[3][1]
+    assert "곡 불러오기" in titles[0][1] and "키" in titles[1][1] and "템포" in titles[2][1] and "AI 모델" in titles[3][1]
+    assert w.start_btn.parentWidget() is w.run_box and w.run_box.parentWidget() is w.open_btn.parentWidget()
     assert w.open_btn.window() is w and w.open_btn.parentWidget() is not w.play_btn.parentWidget()
     assert w.mixer.track("original").mute and not w.chips
     w.grab().save(str(work/"shot-main.png"))
@@ -83,16 +84,48 @@ if MODE == "6":
     assert w.mixer.track("piano").mute
     w.reset_mix(); app.processEvents()
     assert not any(t.mute for t in w.mixer.tracks if t.key != "original") and w.mixer.track("original").mute
-    w.set_format("wav24"); w.export_all(); wait()
-    files = sorted((work/"out").rglob("*.wav"))
+    # [트랙 저장] = 지금 들리는 트랙: 피아노 M → 5개, 피아노 S → 1개, 원본만 S → 저장 안 함
+    w.rows["piano"].set_muted(True); app.processEvents()
+    assert w.audible_stems() == ["vocals", "drums", "bass", "guitar", "other"], w.audible_stems()
+    w.set_format("wav24"); w.export_tracks(); wait()
+    assert len(list((work/"out").rglob("*.wav"))) == 5
+    w.reset_mix(); w.rows["piano"].set_solo(True); app.processEvents()
+    assert w.audible_stems() == ["piano"]
+    w.rows["piano"].slider.setValue(40); w.set_format("flac"); w.export_tracks(); wait()
+    fl = list((work/"out").rglob("*.flac")); assert len(fl) == 1 and "피아노" in fl[0].name, fl
+    w.reset_mix(); w.rows["original"].set_solo(True); app.processEvents()
+    assert w.audible_stems() == []
+    errs = []
+    import music_separator.ui.main_window as mw
+    w._error = lambda m: errs.append(m)
+    w.export_tracks(); assert errs and "원본" in errs[0], errs
+    w.reset_mix(); app.processEvents()
+    assert not hasattr(w.rows["vocals"].card, "toggle")
+    assert not hasattr(w, "export_sel_btn") and w.export_btn.text().strip() == "트랙 저장"
+    files = sorted((work/"out").rglob("*.wav")) + fl
     out["files"] = [f.name for f in files]
-    assert len(files) == 6, out["files"]
     assert "Blue Night" in w.source_lbl.text()
     assert not w.home_btn.isVisible() and w.pages.currentIndex() == 1
     assert "홈 화면" not in [a.text() for a in w._menu.actions()]
 else:
-    assert w.pages.currentIndex() == 0 and w.open_btn.parentWidget() is w.play_btn.parentWidget()
+    assert w.pages.currentIndex() == 0
     w.show_advanced(); app.processEvents()
+    # MR MAKER 도 같은 배치: 1 곡 불러오기·AI 분리 · 2 MR·보컬 저장 · 3 키 · 4 템포 · 5 AI 모델
+    from PySide6.QtWidgets import QLabel
+    left = w.findChild(type(w.track_scroll), "LeftScroll").widget().layout()
+    titles = [[l.text() for l in left.itemAt(i).widget().findChildren(QLabel)
+               if l.objectName() == "NumBadge" or l.property("role") == "cardTitle"][:2]
+              for i in range(left.count()) if left.itemAt(i).widget() is not None and left.itemAt(i).widget().isVisibleTo(w)]
+    out["left"] = titles
+    assert [t[0] for t in titles] == ["1", "2", "3", "4", "5"], titles
+    assert "곡 불러오기" in titles[0][1] and "MR" in titles[1][1] and "AI 모델" in titles[4][1], titles
+    assert w.start_btn.parentWidget() is w.run_box and w.run_box.parentWidget() is w.open_btn.parentWidget()
+    assert w.open_btn.parentWidget() is not w.play_btn.parentWidget()
+    assert w.audible_stems() == ["vocals", "instrumental"] and not hasattr(w.rows["vocals"].card, "toggle")
+    w.rows["vocals"].set_muted(True); app.processEvents(); assert w.audible_stems() == ["instrumental"]
+    w.export_tracks(); wait()
+    files = list((work/"out").rglob("*.wav")); out["files"] = [f.name for f in files]
+    assert len(files) == 1 and "반주" in files[0].name or "Instrumental" in files[0].name, out["files"]
     assert w.home_btn.isVisible() and list(w.rows) == ["original", "vocals", "instrumental"]
     w.grab().save(str(work/"shot-maker.png"))
 print(json.dumps(out, ensure_ascii=False, indent=1, default=str))
