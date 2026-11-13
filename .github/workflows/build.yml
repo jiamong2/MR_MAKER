@@ -4,6 +4,7 @@
 #   main 커밋 메시지에 [release]           → MR MAKER 만 빌드해 태그 v<MAKER_VERSION> 으로 릴리스 (GitHub '최신 릴리스')
 #   main 커밋 메시지에 [release separator] → MR SEPARATOR 만 빌드해 태그 separator-v<SEPARATOR_VERSION> 으로 릴리스
 #   ※ 릴리스 커밋은 .md · docs 말고 다른 파일도 바꿔야 함 (paths-ignore 때문에 빈 커밋이나 문서만 바꾼 커밋은 빌드가 안 돎)
+#   ※ 두 프로그램을 연달아 릴리스할 때는 앞 빌드가 끝난 뒤 다음 릴리스 커밋을 push (같은 브랜치의 새 push 가 진행 중인 빌드를 취소함)
 #
 # 실행 방법
 #   - main 브랜치에 push 또는 Pull Request → 테스트 + 빌드
