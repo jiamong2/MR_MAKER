@@ -118,8 +118,9 @@ class SettingsDialog(QDialog):
         self.fmt.setCurrentIndex(max(0, self.fmt.findData(win.fmt_combo.currentData())))
         self.fmt.currentIndexChanged.connect(lambda *_: win.set_format(self.fmt.currentData()))
         lay.addWidget(self.fmt)
-        lay.addWidget(label("WAV 24-bit(기본)·FLAC 은 무손실이라 추가 음질 손실이 없습니다. MP3 320kbps 는 마지막에 한 번만 "
-                            "인코딩합니다. 무손실 형식으로 저장해도 원본(예: YouTube·MP3)에 없던 음질이 생기지는 않습니다.",
+        lay.addWidget(label("원본에 맞춤(기본): 원본보다 좋은 형식으로 저장해도 음질은 좋아지지 않고 파일만 커지므로 "
+                            "원본 음질에 맞춰 고릅니다. 손실 압축(YouTube·MP3 등) → MP3 320kbps, CD 음질 → FLAC 16-bit, "
+                            "고해상도 → FLAC 24-bit. DAW 로 가져갈 때처럼 WAV 가 필요하면 직접 고르세요.",
                             "faint", wrap=True))
         lay.addSpacing(6)
         lay.addWidget(label("음질", "sectionLabel"))
@@ -895,7 +896,13 @@ class MainWindow(QMainWindow):
         self.preset_btns.get(preset, self.preset_btns[default]).setChecked(True)
         idx = self.device_combo.findData(s.value(vk("device"), "auto"))
         self.device_combo.setCurrentIndex(max(0, idx))
-        idx = self.fmt_combo.findData(s.value("fmt", audio_io.DEFAULT_FORMAT))
+        fmt = s.value("fmt", audio_io.DEFAULT_FORMAT)
+        if not s.value("fmt_auto_migrated", False, type=bool):
+            # 예전 기본값(WAV 24-bit)으로 쓰던 사용자도 새 기본값 '원본에 맞춤'으로 (한 번만)
+            if fmt in (None, "", "wav24"):
+                fmt = "auto"
+            s.setValue("fmt_auto_migrated", True)
+        idx = self.fmt_combo.findData(fmt)
         self.fmt_combo.setCurrentIndex(max(0, idx))
         s.remove(vk("engine"))          # 없어진 'AI 모델' 선택값 (처리 방식보다 우선하던 문제)
         self.keep_native_rate = s.value("keep_native", True, type=bool)
@@ -1136,7 +1143,30 @@ class MainWindow(QMainWindow):
         self._start_bpm(la)
         self.set_status(f"{la.source.name} ({audio_io.format_time(la.seconds)}) — "
                         + "[AI 분리 시작]을 누르세요.")
+        self._update_auto_format()
         self._set_state()
+
+    def _export_fmt(self) -> str:
+        """저장 형식 ('원본에 맞춤'이면 불러온 원본의 음질에 맞는 실제 형식)."""
+        return audio_io.resolve_format(self.fmt_combo.currentData() or audio_io.DEFAULT_FORMAT,
+                                       self.loaded.quality if self.loaded is not None else None)
+
+    def _update_auto_format(self):
+        """형식 목록의 '원본에 맞춤' 항목에 지금 원본이면 무엇으로 저장되는지 표시."""
+        i = self.fmt_combo.findData("auto")
+        if i < 0:
+            return
+        q = self.loaded.quality if self.loaded is not None else None
+        if q is None:
+            self.fmt_combo.setItemText(i, audio_io.EXPORT_FORMATS["auto"][0])
+            self.fmt_combo.setItemData(i, "원본 음질에 맞춰 저장 형식을 고릅니다.\n"
+                                          "손실 압축(YouTube·MP3 등) → MP3 320kbps · CD 음질 → FLAC 16-bit · "
+                                          "고해상도 → FLAC 24-bit", Qt.ItemDataRole.ToolTipRole)
+            return
+        self.fmt_combo.setItemText(i, f"원본에 맞춤 · {audio_io.SHORT_FORMAT_NAMES[q.fmt]}")
+        self.fmt_combo.setItemData(i, q.describe(), Qt.ItemDataRole.ToolTipRole)
+        if self.fmt_combo.currentData() == "auto":
+            self.fmt_combo.setToolTip("저장 파일 형식\n" + q.describe())
 
     def _on_load_failed(self, msg: str):
         self.file_title.setText("음악을 더 자유롭게, 당신의 사운드로")
@@ -1479,7 +1509,7 @@ class MainWindow(QMainWindow):
         if self.result is None:
             return
         g = self._guide_gain()
-        fmt = self.fmt_combo.currentData()
+        fmt = self._export_fmt()
         ext = audio_io.EXPORT_FORMATS[fmt][1]
         if g:
             suffix = f"MR (가이드 보컬 {int(round(g * 100))}%)"
@@ -1510,7 +1540,7 @@ class MainWindow(QMainWindow):
         return (f" [Key {self.key_target:+d}]" if self.key_target else "") + pitch.tempo_suffix(self.tempo_target)
 
     def _stem_jobs(self, keys: list[str]) -> list[ExportJob]:
-        fmt = self.fmt_combo.currentData()
+        fmt = self._export_fmt()
         ext = audio_io.EXPORT_FORMATS[fmt][1]
         jobs = []
         for k in keys:
@@ -2033,6 +2063,9 @@ class MainWindow(QMainWindow):
             detail.append(f"분리: {engine.ENGINES[sep['engine']].short} ({engine.PRESETS[sep['preset']].title}) · {dev}"
                           + (" · 이전 결과 재사용" if sep["reused"]
                              else f" · {audio_io.format_time(sep['elapsed_sec'])}"))
+        q = rep.get("quality")
+        if q and q.get("format_choice") == "auto":
+            detail.append(f"저장 형식(원본에 맞춤): {q['text']}")
         steps = rep["decode"]["resample_steps"]
         lossy = rep.get("lossy_encodes", 0)
         detail.append("처리: float32 무손실 중간 데이터 · "
@@ -2099,7 +2132,7 @@ class MainWindow(QMainWindow):
             self._reset_tracks(clear_original=True)
             self._invalidate_key_cache()
             la = LoadedAudio(prep.source_path, prep.mix44_path, prep.n_samples, prep.peaks, prep.native_rate,
-                             prep.native_path, title=prep.title, source_id=prep.source_id)
+                             prep.native_path, title=prep.title, source_id=prep.source_id, quality=prep.quality)
             self._on_loaded(la)
             if res.separation is None:          # 원본만 저장한 경우: 원본만 불러옴
                 return
@@ -2573,7 +2606,7 @@ HELP_TEXT = """[홈 화면 — 원클릭]
 2. [보컬만] 또는 [반주(MR)만]을 고릅니다 (기본: 반주).
 3. 키 조절: −/+ 또는 슬라이더 (−12 ~ +12 반음, 템포·길이는 그대로). 0 이면 처리하지 않습니다.
 4. [음원 추출 시작] → 진행 상황이 단계별로 표시되고, 끝나면 저장 폴더에 파일이 생깁니다.
-   • 기본 출력: WAV 24-bit (설정에서 FLAC·MP3 320kbps 선택)
+   • 기본 출력: 원본에 맞춤 (YouTube·MP3 → MP3 320kbps, CD 음질 → FLAC 16-bit, 고해상도 → FLAC 24-bit)
    • YouTube 는 권리가 있는 영상만 사용하세요.
 
 [고급 옵션]
@@ -2609,7 +2642,8 @@ HELP_TEXT_6 = """[기본 흐름]
   - 아무것도 안 건드리면 6개 트랙 전부 (DAW 로 가져갈 때)
   - 피아노 S 만 켜면 피아노 트랙 하나 / 피아노 M 만 켜면 피아노를 뺀 5개 트랙
 • 볼륨 슬라이더는 듣기용이라, 저장되는 트랙은 원래 음량입니다. 원본 트랙은 저장하지 않습니다.
-• 저장 형식·위치는 아래 막대와 [설정]에서 바꿉니다 (기본 WAV 24-bit).
+• 저장 형식·위치는 아래 막대와 [설정]에서 바꿉니다.
+  기본 '원본에 맞춤': YouTube·MP3 → MP3 320kbps, CD 음질 → FLAC 16-bit, 고해상도 → FLAC 24-bit
 
 [키 · 템포]
 • 키: −12 ~ +12 반음 (드럼은 음높이를 바꾸지 않습니다). 템포: 50% ~ 200%.

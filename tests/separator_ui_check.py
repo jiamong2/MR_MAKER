@@ -46,7 +46,8 @@ mix = sum(stems.values()).astype(np.float32)
 d = w.session_dir; np.save(d/"orig.npy", mix)
 run = d/"run1"; run.mkdir()
 src = work/"Blue Night (Live Session).wav"; audio_io.write_wav(src, mix, 24, sr)
-la = LoadedAudio(src, d/"orig.npy", n, compute_peaks(mix), sr, d/"orig.npy", source_id="file:test")
+la = LoadedAudio(src, d/"orig.npy", n, compute_peaks(mix), sr, d/"orig.npy", source_id="file:test",
+                 quality=audio_io.assess_quality(audio_io.probe_audio(src), mix, sr))
 w._on_loaded(la); app.processEvents()
 if "--empty" in sys.argv:
     w.grab().save(str(work/"shot-empty.png")); sys.exit(0)
@@ -123,9 +124,12 @@ else:
     assert w.open_btn.parentWidget() is not w.play_btn.parentWidget()
     assert w.audible_stems() == ["vocals", "instrumental"] and not hasattr(w.rows["vocals"].card, "toggle")
     w.rows["vocals"].set_muted(True); app.processEvents(); assert w.audible_stems() == ["instrumental"]
+    # 저장 형식 기본값 '원본에 맞춤': 원본이 24-bit WAV(고해상도) → FLAC 24-bit
+    assert w.fmt_combo.currentData() == "auto" and w._export_fmt() == "flac", w._export_fmt()
+    assert "FLAC 24-bit" in w.fmt_combo.itemText(w.fmt_combo.findData("auto"))
     w.export_tracks(); wait()
-    files = list((work/"out").rglob("*.wav")); out["files"] = [f.name for f in files]
-    assert len(files) == 1 and "반주" in files[0].name or "Instrumental" in files[0].name, out["files"]
+    files = list((work/"out").rglob("*.flac")); out["files"] = [f.name for f in files]
+    assert len(files) == 1 and ("반주" in files[0].name or "Instrumental" in files[0].name), out["files"]
     assert w.home_btn.isVisible() and list(w.rows) == ["original", "vocals", "instrumental"]
     w.grab().save(str(work/"shot-maker.png"))
 print(json.dumps(out, ensure_ascii=False, indent=1, default=str))

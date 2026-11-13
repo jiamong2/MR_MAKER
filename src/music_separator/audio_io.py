@@ -37,14 +37,19 @@ SUPPORTED_EXTENSIONS = {
 
 # 키: (표시 이름, 확장자, 무손실 여부, 정수 형식이라 0dBFS 초과 시 잘림)
 EXPORT_FORMATS = {
-    "wav24": ("WAV 24-bit (권장)", ".wav"),
+    # "auto" 는 실제 형식이 아니라 '원본 음질에 맞춰 고름' — 저장 직전에 resolve_format() 으로 아래 형식 중 하나로 바뀜
+    "auto": ("원본에 맞춤 (권장)", ""),
+    "wav24": ("WAV 24-bit", ".wav"),
     "wav32f": ("WAV 32-bit float", ".wav"),
     "flac": ("FLAC 24-bit (무손실 압축)", ".flac"),
+    "flac16": ("FLAC 16-bit (무손실 압축)", ".flac"),
     "wav16": ("WAV 16-bit", ".wav"),
     "mp3": ("MP3 320kbps", ".mp3"),
 }
 FLOAT_FORMATS = {"wav32f"}           # 0dBFS 를 넘어도 잘리지 않는 형식
-DEFAULT_FORMAT = "wav24"
+DEFAULT_FORMAT = "auto"
+SHORT_FORMAT_NAMES = {"wav24": "WAV 24-bit", "wav32f": "WAV 32-bit float", "flac": "FLAC 24-bit",
+                      "flac16": "FLAC 16-bit", "wav16": "WAV 16-bit", "mp3": "MP3 320kbps"}
 
 
 class AudioError(Exception):
@@ -171,6 +176,120 @@ def probe_audio(path: Path) -> AudioInfo:
             info.bit_rate_kbps = int(m.group(1))
     info.lossless = any(info.codec.lower().startswith(k) for k in _LOSSLESS)
     return info
+
+
+# ------------------------------------------------- 원본 음질 판단 (저장 형식 '원본에 맞춤') ---
+# 원본보다 좋은 음질로 저장해도 소리는 좋아지지 않고 파일만 커지므로 원본 등급에 맞춘다.
+#   손실 압축 (YouTube Opus/AAC, MP3 …)            → MP3 320kbps   (4분 곡 약 10MB)
+#   CD 음질 무손실 (44.1/48kHz 16-bit WAV·FLAC …)   → FLAC 16-bit   (약 25~30MB)
+#   고해상도 무손실 (24-bit 이상 또는 48kHz 초과)    → FLAC 24-bit
+#   무손실 파일이어도 스펙트럼 위쪽이 16~20kHz 근처에서 칼로 자른 듯 끊겨 있으면 손실 압축을 풀어 저장한
+#   파일(가짜 무손실)로 보고 손실 압축으로 취급.
+AUTO_FORMAT_FOR = {"lossy": "mp3", "cd": "flac16", "hires": "flac", "unknown": "flac"}
+QUALITY_NAMES = {"lossy": "손실 압축", "cd": "CD 음질 (무손실)", "hires": "고해상도 (무손실)", "unknown": "알 수 없음"}
+
+
+@dataclass
+class SourceQuality:
+    kind: str = "unknown"        # lossy / cd / hires / unknown
+    source: str = ""             # 원본 설명 (예: OPUS · 48kHz · stereo · 133kbps)
+    detail: str = ""             # 판단 근거 (가짜 무손실 등)
+
+    @property
+    def fmt(self) -> str:
+        return AUTO_FORMAT_FOR.get(self.kind, "flac")
+
+    @property
+    def label(self) -> str:
+        return QUALITY_NAMES.get(self.kind, "알 수 없음")
+
+    def describe(self) -> str:
+        """예: '원본 손실 압축 (OPUS · 48kHz · 133kbps) → MP3 320kbps 로 저장'"""
+        src = f" ({self.source})" if self.source else ""
+        extra = f" — {self.detail}" if self.detail else ""
+        return f"원본 {self.label}{src}{extra} → {SHORT_FORMAT_NAMES[self.fmt]}"
+
+
+def source_bits(info: AudioInfo) -> int:
+    """무손실 원본의 비트 깊이 (모르면 0)."""
+    c, sf = info.codec.lower(), info.sample_format.lower()
+    m = re.search(r"\((\d+) bit\)", sf)
+    if m:
+        return int(m.group(1))
+    m = re.match(r"pcm_[su](\d+)", c) or re.match(r"pcm_f(\d+)", c)
+    if m:
+        return int(m.group(1))
+    if sf.startswith(("s16", "u8")):
+        return 16 if sf.startswith("s16") else 8
+    if sf.startswith(("s32", "s24", "flt", "dbl", "s64")):
+        return 24
+    return 0
+
+
+def spectral_cutoff(audio: np.ndarray, rate: int) -> Optional[tuple[float, float]]:
+    """스펙트럼 위쪽 끝(Hz)과 그 경계에서 떨어지는 정도(dB). 소리가 거의 없으면 None.
+    손실 압축은 보통 16~20kHz 위를 잘라내 경계가 급하게(25dB 이상) 떨어진다."""
+    x = np.asarray(audio, dtype=np.float32)
+    mono = x.mean(axis=1) if x.ndim == 2 else x
+    nfft = 8192
+    if len(mono) < nfft * 4 or rate < 32000:
+        return None
+    starts = np.linspace(0, len(mono) - nfft, num=min(240, len(mono) // nfft), dtype=np.int64)
+    win = np.hanning(nfft).astype(np.float32)
+    frames = mono[starts[:, None] + np.arange(nfft)[None, :]] * win
+    keep = np.sqrt((frames ** 2).mean(axis=1)) > 1e-4         # 무음 구간 제외
+    if keep.sum() < 8:
+        return None
+    pw = (np.abs(np.fft.rfft(frames[keep], axis=1)) ** 2).mean(axis=0)
+    freqs = np.fft.rfftfreq(nfft, 1 / rate)
+    db = 10 * np.log10(pw + 1e-20)
+    k = max(1, int(150 / (freqs[1] - freqs[0])))
+    sm = np.convolve(db, np.ones(k) / k, mode="same")
+    ref = float(np.median(sm[(freqs >= 1000) & (freqs <= 5000)]))
+    band = (freqs >= 8000) & (freqs <= rate / 2 - 300)
+    above = np.where(band & (sm > ref - 60))[0]
+    if not len(above):
+        return None
+    cut = float(freqs[above[-1]])
+    lo = sm[(freqs >= cut - 1500) & (freqs <= cut - 300)]
+    hi = sm[(freqs >= cut + 300) & (freqs <= min(cut + 1500, rate / 2 - 100))]
+    drop = float(lo.mean() - hi.mean()) if len(lo) and len(hi) else 0.0
+    return cut, drop
+
+
+def assess_quality(info: AudioInfo, audio: Optional[np.ndarray] = None, rate: int = 0) -> SourceQuality:
+    """원본 음질 등급. audio(원본 샘플레이트 그대로)를 주면 가짜 무손실도 확인."""
+    q = SourceQuality(source=info.summary() if info.codec else "")
+    if not info.codec:
+        return q
+    if not info.lossless:
+        q.kind = "lossy"
+        return q
+    bits = source_bits(info)
+    sr = info.sample_rate or rate
+    q.kind = "hires" if (bits >= 24 or sr > 48000) else "cd"
+    if bits:
+        q.source += f" · {bits}-bit"
+    if audio is not None and (sr or rate):
+        try:
+            sc = spectral_cutoff(audio, sr or rate)
+        except Exception:  # noqa: BLE001 — 판단 보조일 뿐
+            sc = None
+        if sc is not None:
+            cut, drop = sc
+            # MP3 320k·Opus 는 약 20kHz, 128k 는 16~17kHz 에서 급하게 끊김. 실제 CD 는 21kHz 이상까지 있거나
+            # 완만하게 줄어듦 → '20.5kHz 아래에서 30dB 넘게 뚝 떨어짐'일 때만 손실 압축으로 판단
+            if cut < 20500 and drop > 30 and (sr or rate) / 2 - cut > 1000:
+                q.kind = "lossy"
+                q.detail = f"{cut / 1000:.1f}kHz 위가 잘려 있어 손실 압축을 풀어 저장한 파일로 보임"
+    return q
+
+
+def resolve_format(fmt: str, quality: Optional[SourceQuality]) -> str:
+    """'원본에 맞춤'이면 원본 등급에 맞는 형식, 아니면 그대로."""
+    if fmt != "auto":
+        return fmt
+    return (quality or SourceQuality()).fmt
 
 
 def _probe_text(path: Path) -> str:
@@ -337,10 +456,13 @@ def _ffmpeg_encode(path: Path, data: np.ndarray, sample_rate: int, codec_args: l
     kw = _popen_kwargs()
     kw.pop("stdin", None)
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, **kw)
+    rng = np.random.default_rng(12345) if input_format == "s16le" else None   # write_wav 16-bit 와 같은 디더
     try:
         for start in range(0, n, block):
             chunk = np.asarray(data[start:start + block], dtype=np.float32)
-            if input_format == "s32le":   # 24-bit 로 반올림한 값을 상위 24비트에 (FLAC 24-bit = WAV 24-bit 와 같은 값)
+            if input_format == "s16le":
+                raw = _to_int(chunk, 16, rng).astype("<i2").tobytes()
+            elif input_format == "s32le":   # 24-bit 로 반올림한 값을 상위 24비트에 (FLAC 24-bit = WAV 24-bit 와 같은 값)
                 raw = (_to_int(chunk, 24).astype("<i4") << 8).astype("<i4").tobytes()
             else:
                 raw = np.ascontiguousarray(np.clip(chunk, -1.0, 1.0), dtype="<f4").tobytes()
@@ -415,6 +537,13 @@ def write_flac(path: Path, data: np.ndarray, sample_rate: int = SAMPLE_RATE,
                    input_format="s32le")
 
 
+def write_flac16(path: Path, data: np.ndarray, sample_rate: int = SAMPLE_RATE,
+                 progress: Optional[Callable[[float], None]] = None, block: int = SAMPLE_RATE * 10) -> None:
+    """FLAC 16-bit (CD 음질 원본용). WAV 16-bit 와 같은 디더·반올림으로 정수화해 전달."""
+    _ffmpeg_encode(path, data, sample_rate, ["-c:a", "flac", "-sample_fmt", "s16", "-compression_level", "8"],
+                   progress, block, "FLAC", input_format="s16le")
+
+
 def write_audio(path: Path, data: np.ndarray, fmt: str, sample_rate: int = SAMPLE_RATE,
                 progress: Optional[Callable[[float], None]] = None) -> None:
     if fmt == "wav16":
@@ -425,6 +554,8 @@ def write_audio(path: Path, data: np.ndarray, fmt: str, sample_rate: int = SAMPL
         write_wav_float(path, data, sample_rate, progress=progress)
     elif fmt == "flac":
         write_flac(path, data, sample_rate, progress=progress)
+    elif fmt == "flac16":
+        write_flac16(path, data, sample_rate, progress=progress)
     elif fmt == "mp3":
         write_mp3(path, data, sample_rate=sample_rate, progress=progress)
     else:
@@ -432,9 +563,9 @@ def write_audio(path: Path, data: np.ndarray, fmt: str, sample_rate: int = SAMPL
 
 
 def estimate_export_bytes(n_samples: int, fmt: str, sample_rate: int = SAMPLE_RATE) -> int:
-    if fmt == "wav16":
+    if fmt in ("wav16", "flac16"):
         return n_samples * CHANNELS * 2 + 1024
-    if fmt in ("wav24", "flac"):
+    if fmt in ("wav24", "flac", "auto"):
         return n_samples * CHANNELS * 3 + 1024
     if fmt == "wav32f":
         return n_samples * CHANNELS * 4 + 1024

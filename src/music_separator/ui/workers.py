@@ -28,6 +28,7 @@ class LoadedAudio:
     native_path: Optional[Path] = None   # 원본 샘플레이트 사본 (44.1kHz 원본이면 mix_path)
     title: Optional[str] = None          # 표시·저장용 이름 (YouTube 제목 등)
     source_id: str = ""
+    quality: Optional[audio_io.SourceQuality] = None   # 원본 음질 (저장 형식 '원본에 맞춤')
 
     @property
     def seconds(self) -> float:
@@ -51,7 +52,10 @@ class LoadThread(QThread):
         try:
             # 원본 샘플레이트로 한 번만 디코딩 → 필요할 때만 soxr VHQ 로 44.1kHz 변환 (FFmpeg 리샘플러 미사용)
             native = audio_io.decode_audio(self.source, None)
-            rate = audio_io.probe_audio(self.source).sample_rate or audio_io.SAMPLE_RATE
+            info = audio_io.probe_audio(self.source)
+            rate = info.sample_rate or audio_io.SAMPLE_RATE
+            quality = audio_io.assess_quality(info, native, rate)
+            log.info("source quality: %s", quality.describe())
             native_path = self.target
             if rate != audio_io.SAMPLE_RATE:
                 native_path = self.target.with_name(self.target.stem + f"_{rate}.npy")
@@ -65,7 +69,7 @@ class LoadThread(QThread):
             n = len(data)
             del data
             self.done.emit(LoadedAudio(self.source, self.target, n, peaks, rate, native_path,
-                                       source_id=pipeline.source_id_for(str(self.source))))
+                                       source_id=pipeline.source_id_for(str(self.source)), quality=quality))
         except audio_io.AudioError as exc:
             self.failed.emit(str(exc))
         except MemoryError:

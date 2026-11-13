@@ -95,6 +95,7 @@ class Prepared:
     peaks: np.ndarray
     youtube: Optional[youtube.AcquiredAudio] = None
     resample_steps: list = field(default_factory=list)
+    quality: Optional[audio_io.SourceQuality] = None   # 원본 음질 등급 (저장 형식 '원본에 맞춤')
 
 
 @dataclass
@@ -250,9 +251,12 @@ class Pipeline:
             mix44, mix44_path = native, native_path
         n = len(mix44)
         peaks = compute_peaks(mix44)
+        quality = audio_io.assess_quality(info, native, rate)
+        log.info("source quality: %s", quality.describe())
         del native, mix44
         self.report(1.0, "디코딩 완료")
-        return Prepared(sid, kind, path, title, info, native_path, rate, mix44_path, n, peaks, acquired, steps)
+        return Prepared(sid, kind, path, title, info, native_path, rate, mix44_path, n, peaks, acquired, steps,
+                        quality=quality)
 
     # ----------------------------------------------------------- 5~6 단계 ---
     def separate(self, prep: Prepared, previous: Optional[engine.SeparationResult] = None,
@@ -378,20 +382,21 @@ class Pipeline:
 
     def jobs(self, prep: Prepared, res: Optional[engine.SeparationResult]) -> list[ExportJob]:
         spec = self.spec
-        ext = audio_io.EXPORT_FORMATS[spec.fmt][1]
+        fmt = audio_io.resolve_format(spec.fmt, prep.quality)
+        ext = audio_io.EXPORT_FORMATS[fmt][1]
         song = audio_io.safe_filename(prep.title, 60)
         song_dir = Path(spec.out_dir) / song
         key = f" [Key {spec.semitones:+d}]" if spec.semitones else ""
         out = []
         if spec.target in ("vocals", "both"):
             p = audio_io.unique_path(song_dir / audio_io.safe_filename(f"{song} - 보컬 (Vocals){key}{ext}"))
-            out.append(ExportJob(p, spec.fmt, "보컬", "stem", key="vocals"))
+            out.append(ExportJob(p, fmt, "보컬", "stem", key="vocals"))
         if spec.target in ("mr", "both"):
             p = audio_io.unique_path(song_dir / audio_io.safe_filename(f"{song} - MR (보컬 제거){key}{ext}"))
-            out.append(ExportJob(p, spec.fmt, "MR", "mr", excluded=["vocals"], gains={}))
+            out.append(ExportJob(p, fmt, "MR", "mr", excluded=["vocals"], gains={}))
         if spec.target == "original":
             p = audio_io.unique_path(song_dir / audio_io.safe_filename(f"{song} - 원본{key}{ext}"))
-            out.append(ExportJob(p, spec.fmt, "원본", "mr", excluded=[], gains={}))
+            out.append(ExportJob(p, fmt, "원본", "mr", excluded=[], gains={}))
         return out
 
     # ------------------------------------------------------------- 전체 ---
@@ -417,6 +422,9 @@ class Pipeline:
                 "channels": info.channels, "channel_layout": info.channel_layout, "bit_rate_kbps": info.bit_rate_kbps,
                 "duration": round(info.duration, 2), "container": info.container, "lossless": info.lossless,
             },
+            "quality": None if prep.quality is None else {
+                "kind": prep.quality.kind, "auto_format": prep.quality.fmt, "detail": prep.quality.detail,
+                "format_choice": "auto" if self.spec.fmt == "auto" else "manual", "text": prep.quality.describe()},
             "decode": {"native_rate": prep.native_rate, "resample_steps": prep.resample_steps,
                        "intermediate": "float32 PCM (.npy, 무손실)"},
             "separation": None if res is None else {

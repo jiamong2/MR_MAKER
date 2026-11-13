@@ -429,12 +429,13 @@ def _save(spec, prep, sep, run_dir: Path, mel_path: Path, har_path: Path, report
         raise pipeline.PipelineError(f"저장 폴더를 만들 수 없습니다:\n{song_dir}\n({exc})\n"
                                      "고급 옵션의 [설정]에서 다른 저장 위치를 선택해 주세요.", "encode", "output",
                                      False) from exc
-    ext = audio_io.EXPORT_FORMATS[spec.fmt][1]
+    fmt = audio_io.resolve_format(spec.fmt, prep.quality)
+    ext = audio_io.EXPORT_FORMATS[fmt][1]
     kl = f" [Key {spec.semitones:+d}]" if spec.semitones else ""
     name = lambda label: audio_io.unique_path(song_dir / audio_io.safe_filename(f"{song} - {label}{kl}{ext}"))  # noqa
-    jobs = [ExportJob(name("MR (보컬 제거)"), spec.fmt, "MR", "mr", excluded=list(STEM_KEYS.values()), gains={}),
-            ExportJob(name(f"{LABELS['mel']} (확인용)"), spec.fmt, LABELS["mel"], "stem", key=STEM_KEYS["mel"]),
-            ExportJob(name(f"{LABELS['har']} (확인용)"), spec.fmt, LABELS["har"], "stem", key=STEM_KEYS["har"])]
+    jobs = [ExportJob(name("MR (보컬 제거)"), fmt, "MR", "mr", excluded=list(STEM_KEYS.values()), gains={}),
+            ExportJob(name(f"{LABELS['mel']} (확인용)"), fmt, LABELS["mel"], "stem", key=STEM_KEYS["mel"]),
+            ExportJob(name(f"{LABELS['har']} (확인용)"), fmt, LABELS["har"], "stem", key=STEM_KEYS["har"])]
     rate = prep.native_rate if spec.keep_native_rate else engine.MODEL_RATE
     n = int(prep.n_samples * rate / engine.MODEL_RATE)
     need = sum(audio_io.estimate_export_bytes(n, j.fmt, rate) for j in jobs) + n * 8 * (len(jobs) + 4)
